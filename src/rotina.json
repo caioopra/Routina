@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "titulo": "Rotina Semanal",
+    "subtitulo": "Sprint do relatório SLR",
+    "periodo": "Abril 2026",
+    "metaDoMes": "Entregar relatório técnico SLR até 30/04"
+  },
+
+  "dias": {
+    "seg": [
+      { "time": "07:00–07:30", "title": "Café & preparação", "type": "livre" },
+      { "time": "07:30–08:30", "title": "Corrida / Academia", "type": "exercicio", "note": "Alternar semanas: corrida → academia" },
+      { "time": "09:00–12:00", "title": "Trabalho (bloco focado)", "type": "trabalho", "note": "Deep work — tarefas que exigem concentração" },
+      { "time": "12:00–13:30", "title": "Almoço & descanso", "type": "livre" },
+      { "time": "13:30–17:00", "title": "Pesquisa mestrado — SLR", "type": "mestrado", "note": "Bloco principal de pesquisa da semana" },
+      { "time": "17:00–18:30", "title": "Preparação slides da semana", "type": "slides", "note": "~1h30 dos 5h semanais" },
+      { "time": "19:00–22:00", "title": "Aula remota", "type": "aula" },
+      { "time": "22:00–23:00", "title": "Jantar & tempo livre", "type": "livre" }
+    ],
+    "ter": [
+      { "time": "07:00–07:30", "title": "Café & preparação", "type": "livre" },
+      { "time": "07:30–08:30", "title": "Academia", "type": "exercicio" },
+      { "time": "09:00–12:00", "title": "Trabalho (bloco focado)", "type": "trabalho" },
+      { "time": "12:00–13:30", "title": "Almoço & descanso", "type": "livre" },
+      { "time": "13:30–16:00", "title": "Trabalho (bloco leve)", "type": "trabalho", "note": "Reuniões, code review, tarefas menores" },
+      { "time": "16:00–18:30", "title": "Preparação slides + buffer", "type": "slides", "note": "~1h30 — acumulando pro fim da semana" },
+      { "time": "19:00–22:00", "title": "Aula remota", "type": "aula" },
+      { "time": "22:00–23:00", "title": "Jantar & tempo livre", "type": "livre" }
+    ],
+    "qua": [
+      { "time": "07:00–08:30", "title": "Café & preparação", "type": "livre" },
+      { "time": "09:00–11:00", "title": "Aula mestrado (remota)", "type": "mestrado" },
+      { "time": "11:00–12:00", "title": "Pesquisa mestrado — SLR", "type": "mestrado", "note": "Aproveitar o contexto da aula" },
+      { "time": "12:00–13:30", "title": "Almoço & descanso", "type": "livre" },
+      { "time": "13:30–14:30", "title": "Corrida / Academia", "type": "exercicio", "note": "Dia sem aula à noite = flexibilidade" },
+      { "time": "15:00–18:00", "title": "Trabalho (bloco focado)", "type": "trabalho" },
+      { "time": "18:00–19:00", "title": "Pesquisa mestrado — SLR", "type": "mestrado" },
+      { "time": "19:00–23:00", "title": "Tempo livre / lazer", "type": "livre", "note": "Noite inteira livre — recarregar" }
+    ],
+    "qui": [
+      { "time": "07:00–08:00", "title": "Café & preparação", "type": "livre" },
+      { "time": "08:00–09:00", "title": "Preparação slides (finalizar)", "type": "slides", "note": "~1h — fechando os 5h da semana" },
+      { "time": "09:00–10:00", "title": "Reunião semanal (fixa)", "type": "trabalho", "note": "Única reunião fixa" },
+      { "time": "10:00–12:00", "title": "Trabalho", "type": "trabalho" },
+      { "time": "12:00–13:30", "title": "Almoço & descanso", "type": "livre" },
+      { "time": "13:30–16:30", "title": "Trabalho", "type": "trabalho" },
+      { "time": "16:30–18:30", "title": "Pesquisa mestrado — SLR", "type": "mestrado" },
+      { "time": "19:00–22:00", "title": "Aula remota", "type": "aula" },
+      { "time": "22:00–23:00", "title": "Jantar & tempo livre", "type": "livre" }
+    ],
+    "sex": [
+      { "time": "07:00–07:30", "title": "Café & preparação", "type": "livre" },
+      { "time": "07:30–08:30", "title": "Academia", "type": "exercicio", "note": "Último treino da semana" },
+      { "time": "09:00–10:00", "title": "Trabalho (tarefas leves)", "type": "trabalho", "note": "Fechar pendências antes de viajar" },
+      { "time": "10:00–10:30", "title": "Preparar-se para viagem", "type": "viagem" },
+      { "time": "10:30–13:30", "title": "Viagem Criciúma → Floripa", "type": "viagem", "note": "~3h de trajeto" },
+      { "time": "13:30–17:00", "title": "Aula mestrado (presencial)", "type": "mestrado" },
+      { "time": "17:00–20:00", "title": "Viagem Floripa → Criciúma", "type": "viagem", "note": "~3h de volta" },
+      { "time": "20:00–23:00", "title": "Jantar & descanso", "type": "livre", "note": "Dia pesado — descansar" }
+    ],
+    "sab": [
+      { "time": "07:00–09:00", "title": "Café, limpeza, organização", "type": "livre" },
+      { "time": "09:00–12:00", "title": "Pesquisa mestrado — SLR", "type": "mestrado", "note": "Bloco focado — sprint do relatório" },
+      { "time": "12:00–", "title": "Resto do dia livre", "type": "livre", "note": "Lazer, social, descanso" }
+    ],
+    "dom": [
+      { "time": "", "title": "Dia livre", "type": "livre", "note": "Descanso total — fundamental pra sustentar a rotina" }
+    ]
+  },
+
+  "resumo": {
+    "trabalho":  { "label": "Trabalho CLT",            "hours": "~25h", "icon": "💻" },
+    "mestrado":  { "label": "Mestrado (aula + SLR)",    "hours": "~14h", "icon": "🎓" },
+    "aula":      { "label": "Aulas remotas",            "hours": "9h",   "icon": "📚" },
+    "slides":    { "label": "Preparação slides",        "hours": "~5h",  "icon": "🖥️" },
+    "exercicio": { "label": "Exercício físico",         "hours": "~4h",  "icon": "🏃" },
+    "viagem":    { "label": "Viagem Floripa",           "hours": "~6.5h","icon": "🚗" }
+  },
+
+  "regras": [
+    "O relatório SLR é prioridade até fim de abril — os blocos de pesquisa no sábado e segunda à tarde são inegociáveis.",
+    "Slides: distribuídos em 3 dias (seg, ter, qui) pra não acumular.",
+    "Exercício: 4x/semana (seg, ter, qua, sex). Se algum dia estiver apertado, quarta e sexta são os mais fáceis de pular.",
+    "Quarta à noite é seu respiro principal — proteja esse horário.",
+    "Domingo é sagrado. Descanso real. Sem culpa."
+  ]
+}
