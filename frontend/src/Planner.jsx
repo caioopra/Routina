@@ -3,39 +3,49 @@ import data from "./rotina.json";
 
 /* ── palette ── */
 const COLORS = {
-  trabalho:  { bg: "#1e3a5f", text: "#93c5fd", border: "#2563eb" },
-  mestrado:  { bg: "#3b1f4a", text: "#d8b4fe", border: "#7c3aed" },
-  aula:      { bg: "#4a2c1b", text: "#fdba74", border: "#ea580c" },
+  trabalho: { bg: "#1e3a5f", text: "#93c5fd", border: "#2563eb" },
+  mestrado: { bg: "#3b1f4a", text: "#d8b4fe", border: "#7c3aed" },
+  aula: { bg: "#4a2c1b", text: "#fdba74", border: "#ea580c" },
   exercicio: { bg: "#1a3a2a", text: "#86efac", border: "#16a34a" },
-  slides:    { bg: "#4a3f1b", text: "#fde68a", border: "#ca8a04" },
-  viagem:    { bg: "#3b3b3b", text: "#d4d4d4", border: "#737373" },
-  livre:     { bg: "#1e2d3d", text: "#7dd3fc", border: "#0284c7" },
+  slides: { bg: "#4a3f1b", text: "#fde68a", border: "#ca8a04" },
+  viagem: { bg: "#3b3b3b", text: "#d4d4d4", border: "#737373" },
+  livre: { bg: "#1e2d3d", text: "#7dd3fc", border: "#0284c7" },
 };
 
 /* surface depth tokens */
 const S = {
-  base:    "#08060f",
+  base: "#08060f",
   surface: "#0f0c1a",
-  raised:  "#161227",
+  raised: "#161227",
   overlay: "#1e1836",
-  border:  "#2a2242",
+  border: "#2a2242",
   borderSubtle: "#1c1733",
-  textPrimary:   "#eeedf5",
+  textPrimary: "#eeedf5",
   textSecondary: "#a8a3c0",
-  textMuted:     "#6e6890",
-  accent:        "#8b5cf6",
-  accentDim:     "#6d45d9",
-  accentGlow:    "rgba(139, 92, 246, 0.15)",
+  textMuted: "#6e6890",
+  accent: "#8b5cf6",
+  accentDim: "#6d45d9",
+  accentGlow: "rgba(139, 92, 246, 0.15)",
 };
 
 const DAYS_LABELS = {
-  seg: "Segunda", ter: "Terça", qua: "Quarta",
-  qui: "Quinta", sex: "Sexta", sab: "Sábado", dom: "Domingo",
+  seg: "Segunda",
+  ter: "Terça",
+  qua: "Quarta",
+  qui: "Quinta",
+  sex: "Sexta",
+  sab: "Sábado",
+  dom: "Domingo",
 };
 
 const DAYS_SHORT = {
-  seg: "Seg", ter: "Ter", qua: "Qua",
-  qui: "Qui", sex: "Sex", sab: "Sáb", dom: "Dom",
+  seg: "Seg",
+  ter: "Ter",
+  qua: "Qua",
+  qui: "Qui",
+  sex: "Sex",
+  sab: "Sáb",
+  dom: "Dom",
 };
 
 const FONT_DISPLAY = "'Outfit', sans-serif";
@@ -45,7 +55,7 @@ const FONT_MONO = "'JetBrains Mono', monospace";
 /* ── responsive hook ── */
 function useMediaQuery(query) {
   const [matches, setMatches] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia(query).matches : false
+    typeof window !== "undefined" ? window.matchMedia(query).matches : false,
   );
   useEffect(() => {
     const mql = window.matchMedia(query);
@@ -165,19 +175,21 @@ function injectStyles() {
 function Tag({ type, children }) {
   const c = COLORS[type] || COLORS.trabalho;
   return (
-    <span style={{
-      display: "inline-block",
-      fontSize: 9,
-      fontWeight: 700,
-      letterSpacing: "0.08em",
-      textTransform: "uppercase",
-      fontFamily: FONT_BODY,
-      color: c.text,
-      background: `${c.bg}bb`,
-      border: `1px solid ${c.border}55`,
-      borderRadius: 4,
-      padding: "2px 6px",
-    }}>
+    <span
+      style={{
+        display: "inline-block",
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        fontFamily: FONT_BODY,
+        color: c.text,
+        background: `${c.bg}bb`,
+        border: `1px solid ${c.border}55`,
+        borderRadius: 4,
+        padding: "2px 6px",
+      }}
+    >
       {children}
     </span>
   );
@@ -198,46 +210,70 @@ function Block({ time, title, type, note, index = 0, compact = false }) {
         animationDelay: `${index * 45}ms`,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span style={{
-          fontSize: compact ? 10 : 11,
-          color: S.textSecondary,
-          fontVariantNumeric: "tabular-nums",
-          fontFamily: FONT_MONO,
-          whiteSpace: "nowrap",
-          fontWeight: 500,
-        }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            fontSize: compact ? 10 : 11,
+            color: S.textSecondary,
+            fontVariantNumeric: "tabular-nums",
+            fontFamily: FONT_MONO,
+            whiteSpace: "nowrap",
+            fontWeight: 500,
+          }}
+        >
           {time}
         </span>
         <Tag type={type}>{type === "exercicio" ? "exercício" : type}</Tag>
       </div>
-      <div style={{
-        fontSize: compact ? 12 : 13,
-        color: S.textPrimary,
-        fontWeight: 600,
-        fontFamily: FONT_BODY,
-        marginTop: 4,
-        lineHeight: 1.35,
-      }}>
+      <div
+        style={{
+          fontSize: compact ? 12 : 13,
+          color: S.textPrimary,
+          fontWeight: 600,
+          fontFamily: FONT_BODY,
+          marginTop: 4,
+          lineHeight: 1.35,
+        }}
+      >
         {title}
       </div>
       {note && !compact && (
-        <div style={{
-          fontSize: 11, color: S.textMuted, marginTop: 3,
-          fontStyle: "italic", lineHeight: 1.45,
-          fontFamily: FONT_BODY,
-        }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: S.textMuted,
+            marginTop: 3,
+            fontStyle: "italic",
+            lineHeight: 1.45,
+            fontFamily: FONT_BODY,
+          }}
+        >
           {note}
         </div>
       )}
       {note && compact && (
-        <div style={{
-          fontSize: 10, color: S.textMuted, marginTop: 2,
-          fontStyle: "italic", lineHeight: 1.35,
-          fontFamily: FONT_BODY,
-          overflow: "hidden", textOverflow: "ellipsis",
-          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
-        }}>
+        <div
+          style={{
+            fontSize: 10,
+            color: S.textMuted,
+            marginTop: 2,
+            fontStyle: "italic",
+            lineHeight: 1.35,
+            fontFamily: FONT_BODY,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+          }}
+        >
           {note}
         </div>
       )}
@@ -247,24 +283,29 @@ function Block({ time, title, type, note, index = 0, compact = false }) {
 
 function SectionLabel({ children }) {
   return (
-    <h2 style={{
-      fontSize: 16,
-      fontWeight: 700,
-      fontFamily: FONT_DISPLAY,
-      color: S.textPrimary,
-      margin: "0 0 16px",
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-      letterSpacing: "-0.01em",
-    }}>
-      <span style={{
-        width: 3, height: 18,
-        background: `linear-gradient(180deg, ${S.accent}, ${S.accentDim})`,
-        borderRadius: 2,
-        display: "inline-block",
-        boxShadow: `0 0 8px ${S.accentGlow}`,
-      }} />
+    <h2
+      style={{
+        fontSize: 16,
+        fontWeight: 700,
+        fontFamily: FONT_DISPLAY,
+        color: S.textPrimary,
+        margin: "0 0 16px",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        letterSpacing: "-0.01em",
+      }}
+    >
+      <span
+        style={{
+          width: 3,
+          height: 18,
+          background: `linear-gradient(180deg, ${S.accent}, ${S.accentDim})`,
+          borderRadius: 2,
+          display: "inline-block",
+          boxShadow: `0 0 8px ${S.accentGlow}`,
+        }}
+      />
       {children}
     </h2>
   );
@@ -273,19 +314,23 @@ function SectionLabel({ children }) {
 function DesktopGrid({ dias }) {
   const dayKeys = Object.keys(DAYS_LABELS);
   return (
-    <div style={{
-      background: S.surface,
-      borderRadius: 16,
-      border: `1px solid ${S.border}`,
-      overflow: "hidden",
-      boxShadow: `0 4px 40px rgba(0,0,0,0.3), 0 0 0 1px ${S.borderSubtle}`,
-      animation: "p-scaleIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both",
-    }}>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(7, 1fr)",
-        gap: 0,
-      }}>
+    <div
+      style={{
+        background: S.surface,
+        borderRadius: 16,
+        border: `1px solid ${S.border}`,
+        overflow: "hidden",
+        boxShadow: `0 4px 40px rgba(0,0,0,0.3), 0 0 0 1px ${S.borderSubtle}`,
+        animation: "p-scaleIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both",
+      }}
+    >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          gap: 0,
+        }}
+      >
         {dayKeys.map((key, colIdx) => {
           const isWeekend = key === "sab" || key === "dom";
           const blocks = dias[key] || [];
@@ -294,40 +339,49 @@ function DesktopGrid({ dias }) {
               key={key}
               className="p-day-col"
               style={{
-                borderRight: colIdx < 6 ? `1px solid ${S.borderSubtle}` : "none",
+                borderRight:
+                  colIdx < 6 ? `1px solid ${S.borderSubtle}` : "none",
                 minHeight: 420,
-                background: isWeekend ? "rgba(139, 92, 246, 0.015)" : "transparent",
+                background: isWeekend
+                  ? "rgba(139, 92, 246, 0.015)"
+                  : "transparent",
                 animation: "p-fadeUp 0.4s ease both",
                 animationDelay: `${colIdx * 50}ms`,
               }}
             >
               {/* Day header */}
-              <div style={{
-                padding: "16px 10px 12px",
-                borderBottom: `1px solid ${S.borderSubtle}`,
-                textAlign: "center",
-                background: isWeekend
-                  ? "linear-gradient(180deg, rgba(139,92,246,0.04), transparent)"
-                  : `linear-gradient(180deg, ${S.raised}, transparent)`,
-              }}>
-                <div style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.14em",
-                  fontFamily: FONT_BODY,
-                  color: isWeekend ? S.textMuted : S.accent,
-                }}>
+              <div
+                style={{
+                  padding: "16px 10px 12px",
+                  borderBottom: `1px solid ${S.borderSubtle}`,
+                  textAlign: "center",
+                  background: isWeekend
+                    ? "linear-gradient(180deg, rgba(139,92,246,0.04), transparent)"
+                    : `linear-gradient(180deg, ${S.raised}, transparent)`,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.14em",
+                    fontFamily: FONT_BODY,
+                    color: isWeekend ? S.textMuted : S.accent,
+                  }}
+                >
                   {DAYS_SHORT[key]}
                 </div>
-                <div style={{
-                  fontSize: 14,
-                  fontWeight: 700,
-                  fontFamily: FONT_DISPLAY,
-                  color: isWeekend ? S.textMuted : S.textSecondary,
-                  marginTop: 3,
-                  letterSpacing: "-0.01em",
-                }}>
+                <div
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 700,
+                    fontFamily: FONT_DISPLAY,
+                    color: isWeekend ? S.textMuted : S.textSecondary,
+                    marginTop: 3,
+                    letterSpacing: "-0.01em",
+                  }}
+                >
                   {DAYS_LABELS[key]}
                 </div>
               </div>
@@ -338,12 +392,17 @@ function DesktopGrid({ dias }) {
                   <Block key={i} {...block} index={i} compact />
                 ))}
                 {blocks.length === 0 && (
-                  <div style={{
-                    textAlign: "center", padding: "40px 10px",
-                    color: S.textMuted, fontSize: 12,
-                    fontStyle: "italic", fontFamily: FONT_BODY,
-                    opacity: 0.6,
-                  }}>
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "40px 10px",
+                      color: S.textMuted,
+                      fontSize: 12,
+                      fontStyle: "italic",
+                      fontFamily: FONT_BODY,
+                      opacity: 0.6,
+                    }}
+                  >
                     Sem atividades
                   </div>
                 )}
@@ -358,14 +417,21 @@ function DesktopGrid({ dias }) {
 
 function MobileAgenda({ dias, selectedDay, setSelectedDay }) {
   return (
-    <div style={{
-      animation: "p-fadeUp 0.35s ease both",
-    }}>
+    <div
+      style={{
+        animation: "p-fadeUp 0.35s ease both",
+      }}
+    >
       {/* Day selector pills */}
-      <div style={{
-        display: "flex", gap: 6, marginBottom: 24,
-        overflowX: "auto", paddingBottom: 4,
-      }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          marginBottom: 24,
+          overflowX: "auto",
+          paddingBottom: 4,
+        }}
+      >
         {Object.entries(DAYS_LABELS).map(([key, label]) => {
           const active = selectedDay === key;
           const isWeekend = key === "sab" || key === "dom";
@@ -375,15 +441,27 @@ function MobileAgenda({ dias, selectedDay, setSelectedDay }) {
               className={active ? "" : "p-day-pill"}
               onClick={() => setSelectedDay(key)}
               style={{
-                flex: "0 0 auto", minWidth: 56, padding: "11px 8px",
-                fontSize: 11, fontWeight: active ? 700 : 500,
+                flex: "0 0 auto",
+                minWidth: 56,
+                padding: "11px 8px",
+                fontSize: 11,
+                fontWeight: active ? 700 : 500,
                 fontFamily: FONT_BODY,
-                border: active ? `2px solid ${S.accent}` : `1px solid ${S.borderSubtle}`,
-                borderRadius: 10, cursor: "pointer",
+                border: active
+                  ? `2px solid ${S.accent}`
+                  : `1px solid ${S.borderSubtle}`,
+                borderRadius: 10,
+                cursor: "pointer",
                 background: active
                   ? `linear-gradient(135deg, ${S.overlay}, ${S.raised})`
-                  : isWeekend ? S.base : S.surface,
-                color: active ? "#c4b5fd" : isWeekend ? S.textMuted : S.textSecondary,
+                  : isWeekend
+                    ? S.base
+                    : S.surface,
+                color: active
+                  ? "#c4b5fd"
+                  : isWeekend
+                    ? S.textMuted
+                    : S.textSecondary,
                 boxShadow: active ? `0 0 16px ${S.accentGlow}` : "none",
               }}
             >
@@ -393,12 +471,16 @@ function MobileAgenda({ dias, selectedDay, setSelectedDay }) {
         })}
       </div>
 
-      <h2 style={{
-        fontSize: 22, fontWeight: 700, color: S.textPrimary,
-        fontFamily: FONT_DISPLAY,
-        margin: "0 0 16px",
-        letterSpacing: "-0.02em",
-      }}>
+      <h2
+        style={{
+          fontSize: 22,
+          fontWeight: 700,
+          color: S.textPrimary,
+          fontFamily: FONT_DISPLAY,
+          margin: "0 0 16px",
+          letterSpacing: "-0.02em",
+        }}
+      >
         {DAYS_LABELS[selectedDay]}
       </h2>
 
@@ -422,26 +504,32 @@ function MobileAgenda({ dias, selectedDay, setSelectedDay }) {
 
 function SummaryView({ resumo, regras, isDesktop }) {
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr",
-      gap: isDesktop ? 40 : 28,
-      animation: "p-fadeUp 0.4s ease both",
-    }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr",
+        gap: isDesktop ? 40 : 28,
+        animation: "p-fadeUp 0.4s ease both",
+      }}
+    >
       {/* Weekly distribution */}
-      <div style={{
-        background: S.surface,
-        borderRadius: 16,
-        border: `1px solid ${S.borderSubtle}`,
-        padding: isDesktop ? "28px 24px" : "20px 16px",
-        boxShadow: `0 4px 30px rgba(0,0,0,0.25)`,
-      }}>
+      <div
+        style={{
+          background: S.surface,
+          borderRadius: 16,
+          border: `1px solid ${S.borderSubtle}`,
+          padding: isDesktop ? "28px 24px" : "20px 16px",
+          boxShadow: `0 4px 30px rgba(0,0,0,0.25)`,
+        }}
+      >
         <SectionLabel>Distribuição semanal</SectionLabel>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr",
-          gap: 10,
-        }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isDesktop ? "1fr 1fr" : "1fr",
+            gap: 10,
+          }}
+        >
           {Object.entries(resumo).map(([key, s], idx) => {
             const c = COLORS[key] || COLORS.trabalho;
             return (
@@ -449,7 +537,9 @@ function SummaryView({ resumo, regras, isDesktop }) {
                 key={key}
                 className="p-summary-card"
                 style={{
-                  display: "flex", alignItems: "center", gap: 14,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
                   padding: "14px 16px",
                   background: `linear-gradient(135deg, ${c.bg}55, ${c.bg}22)`,
                   borderRadius: 12,
@@ -460,19 +550,29 @@ function SummaryView({ resumo, regras, isDesktop }) {
               >
                 <span style={{ fontSize: 24, lineHeight: 1 }}>{s.icon}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 13, fontWeight: 600, color: c.text,
-                    fontFamily: FONT_BODY,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: c.text,
+                      fontFamily: FONT_BODY,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {s.label}
                   </div>
                 </div>
-                <span style={{
-                  fontSize: 15, fontWeight: 700, color: S.textPrimary,
-                  fontFamily: FONT_MONO,
-                  whiteSpace: "nowrap",
-                }}>
+                <span
+                  style={{
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: S.textPrimary,
+                    fontFamily: FONT_MONO,
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {s.hours}
                 </span>
               </div>
@@ -482,13 +582,15 @@ function SummaryView({ resumo, regras, isDesktop }) {
       </div>
 
       {/* Rules */}
-      <div style={{
-        background: S.surface,
-        borderRadius: 16,
-        border: `1px solid ${S.borderSubtle}`,
-        padding: isDesktop ? "28px 24px" : "20px 16px",
-        boxShadow: `0 4px 30px rgba(0,0,0,0.25)`,
-      }}>
+      <div
+        style={{
+          background: S.surface,
+          borderRadius: 16,
+          border: `1px solid ${S.borderSubtle}`,
+          padding: isDesktop ? "28px 24px" : "20px 16px",
+          boxShadow: `0 4px 30px rgba(0,0,0,0.25)`,
+        }}
+      >
         <SectionLabel>Regras do mês</SectionLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {regras.map((note, i) => (
@@ -496,11 +598,13 @@ function SummaryView({ resumo, regras, isDesktop }) {
               key={i}
               className="p-rule"
               style={{
-                fontSize: 13, color: S.textSecondary,
+                fontSize: 13,
+                color: S.textSecondary,
                 fontFamily: FONT_BODY,
                 padding: "14px 18px",
                 background: S.raised,
-                borderRadius: 10, lineHeight: 1.65,
+                borderRadius: 10,
+                lineHeight: 1.65,
                 borderLeft: `3px solid ${S.border}`,
                 animation: "p-fadeUp 0.4s ease both",
                 animationDelay: `${i * 55}ms`,
@@ -522,78 +626,93 @@ export default function Planner() {
   const [showSummary, setShowSummary] = useState(false);
   const isDesktop = useMediaQuery("(min-width: 900px)");
 
-  useEffect(() => { injectStyles(); }, []);
+  useEffect(() => {
+    injectStyles();
+  }, []);
 
   const { meta, dias, resumo, regras } = data;
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: `linear-gradient(170deg, ${S.base} 0%, #0a0814 50%, ${S.base} 100%)`,
-      color: S.textPrimary,
-      fontFamily: FONT_BODY,
-      padding: isDesktop ? "44px 56px" : "24px 16px",
-    }}>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: `linear-gradient(170deg, ${S.base} 0%, #0a0814 50%, ${S.base} 100%)`,
+        color: S.textPrimary,
+        fontFamily: FONT_BODY,
+        padding: isDesktop ? "44px 56px" : "24px 16px",
+      }}
+    >
       <link
         href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap"
         rel="stylesheet"
       />
 
       {/* ── Header ── */}
-      <header style={{
-        marginBottom: isDesktop ? 36 : 28,
-        display: isDesktop ? "flex" : "block",
-        alignItems: "flex-end",
-        justifyContent: "space-between",
-        gap: 24,
-        paddingBottom: isDesktop ? 28 : 20,
-        borderBottom: `1px solid ${S.borderSubtle}`,
-        animation: "p-fadeUp 0.5s ease both",
-      }}>
+      <header
+        style={{
+          marginBottom: isDesktop ? 36 : 28,
+          display: isDesktop ? "flex" : "block",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 24,
+          paddingBottom: isDesktop ? 28 : 20,
+          borderBottom: `1px solid ${S.borderSubtle}`,
+          animation: "p-fadeUp 0.5s ease both",
+        }}
+      >
         <div>
-          <div style={{
-            fontSize: 11,
-            letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: S.accent,
-            fontWeight: 600,
-            fontFamily: FONT_BODY,
-          }}>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              color: S.accent,
+              fontWeight: 600,
+              fontFamily: FONT_BODY,
+            }}
+          >
             planejamento {meta.periodo.toLowerCase()}
           </div>
-          <h1 style={{
-            fontSize: isDesktop ? 32 : 24,
-            fontWeight: 800,
-            fontFamily: FONT_DISPLAY,
-            margin: "8px 0 0",
-            color: S.textPrimary,
-            lineHeight: 1.15,
-            letterSpacing: "-0.03em",
-          }}>
+          <h1
+            style={{
+              fontSize: isDesktop ? 32 : 24,
+              fontWeight: 800,
+              fontFamily: FONT_DISPLAY,
+              margin: "8px 0 0",
+              color: S.textPrimary,
+              lineHeight: 1.15,
+              letterSpacing: "-0.03em",
+            }}
+          >
             {meta.titulo}
           </h1>
-          <p style={{
-            fontSize: 14,
-            color: S.textSecondary,
-            margin: "6px 0 0",
-            fontFamily: FONT_BODY,
-            fontWeight: 400,
-          }}>
+          <p
+            style={{
+              fontSize: 14,
+              color: S.textSecondary,
+              margin: "6px 0 0",
+              fontFamily: FONT_BODY,
+              fontWeight: 400,
+            }}
+          >
             {meta.subtitulo}
           </p>
         </div>
 
         {/* Toggle */}
-        <div style={{
-          display: "flex", gap: 0,
-          marginTop: isDesktop ? 0 : 24,
-          background: S.surface,
-          borderRadius: 12,
-          padding: 4,
-          border: `1px solid ${S.border}`,
-          flexShrink: 0,
-          boxShadow: `0 2px 12px rgba(0,0,0,0.2)`,
-        }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 0,
+            marginTop: isDesktop ? 0 : 24,
+            background: S.surface,
+            borderRadius: 12,
+            padding: 4,
+            border: `1px solid ${S.border}`,
+            flexShrink: 0,
+            boxShadow: `0 2px 12px rgba(0,0,0,0.2)`,
+          }}
+        >
           {[
             { key: false, label: "Agenda" },
             { key: true, label: "Resumo & Regras" },
@@ -657,24 +776,28 @@ export default function Planner() {
           animationDelay: "150ms",
         }}
       >
-        <div style={{
-          fontSize: 10,
-          color: S.accent,
-          textTransform: "uppercase",
-          fontWeight: 700,
-          fontFamily: FONT_BODY,
-          letterSpacing: "0.14em",
-          marginBottom: 8,
-        }}>
+        <div
+          style={{
+            fontSize: 10,
+            color: S.accent,
+            textTransform: "uppercase",
+            fontWeight: 700,
+            fontFamily: FONT_BODY,
+            letterSpacing: "0.14em",
+            marginBottom: 8,
+          }}
+        >
           Meta do mês
         </div>
-        <div style={{
-          fontSize: 14,
-          color: "#fde68a",
-          lineHeight: 1.6,
-          fontWeight: 500,
-          fontFamily: FONT_BODY,
-        }}>
+        <div
+          style={{
+            fontSize: 14,
+            color: "#fde68a",
+            lineHeight: 1.6,
+            fontWeight: 500,
+            fontFamily: FONT_BODY,
+          }}
+        >
           {meta.metaDoMes}
         </div>
       </div>

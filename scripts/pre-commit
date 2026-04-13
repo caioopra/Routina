@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -e
+
+# Pre-commit hook: check formatting before allowing commits.
+# Install with: ./scripts/setup-hooks.sh
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# --- Rust formatting ---
+RUST_STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+if [ -n "$RUST_STAGED" ]; then
+  echo "Checking Rust formatting..."
+  if ! (cd "$REPO_ROOT/backend" && cargo fmt -- --check) ; then
+    echo ""
+    echo "Rust formatting check failed."
+    echo "Run 'cd backend && cargo fmt' to fix, then stage the changes."
+    exit 1
+  fi
+fi
+
+# --- Frontend formatting ---
+JS_STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.js' '*.jsx' '*.ts' '*.tsx' '*.css' '*.json' | grep '^frontend/' || true)
+if [ -n "$JS_STAGED" ]; then
+  # Strip the frontend/ prefix so paths resolve from the frontend directory
+  JS_RELATIVE=$(echo "$JS_STAGED" | sed 's|^frontend/||')
+  echo "Checking frontend formatting..."
+  if ! (cd "$REPO_ROOT/frontend" && npx prettier --check $JS_RELATIVE) ; then
+    echo ""
+    echo "Frontend formatting check failed."
+    echo "Run 'cd frontend && npm run format' to fix, then stage the changes."
+    exit 1
+  fi
+fi
+
+echo "Formatting checks passed."
