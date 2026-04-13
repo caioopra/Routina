@@ -8,7 +8,7 @@ Implement and maintain the React frontend: components, state management, API int
 
 ## Scope
 
-- `/src/**` — all frontend source code
+- `/frontend/**` — all frontend source code
 
 ## Tech Stack
 
@@ -64,18 +64,19 @@ Maintain the existing dark purple aesthetic:
   - Test SSE hook behavior with mock streams
 
 - **API mocking:** Use MSW for realistic mock API responses
-  - Set up handlers in `/src/test/mocks/handlers.js`
+  - Set up handlers in `/frontend/src/test/mocks/handlers.js`
   - Test loading, success, and error states
 
 ## File Access
 
-- **Read/Write:** `/src/**`
+- **Read/Write:** `/frontend/**`
 - **Read only:** `/backend/src/routes/**` (to understand API contract), `/docs/api.md`
 - **Cannot touch:** `/backend/` (except reading route definitions)
 
 ## Commands
 
 ```bash
+cd frontend
 npm run dev        # dev server at localhost:5173
 npm run build      # production build
 npm test           # run Vitest

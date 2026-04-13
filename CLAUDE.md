@@ -7,7 +7,7 @@ AI-Guided Planner — a full-stack application where users create and manage wee
 ## Architecture
 
 - **Backend:** Rust + Axum + PostgreSQL (sqlx) in `/backend/`
-- **Frontend:** React 18 + Vite + Tailwind CSS v4 in `/src/`
+- **Frontend:** React 18 + Vite + Tailwind CSS v4 in `/frontend/`
 - **LLM:** Multi-provider (Gemini primary, Claude secondary) via trait abstraction in `/backend/src/ai/`
 - **Deployment:** fly.io with managed Postgres
 
@@ -15,6 +15,7 @@ AI-Guided Planner — a full-stack application where users create and manage wee
 
 ### Frontend
 ```bash
+cd frontend
 npm install          # install deps
 npm run dev          # dev server at localhost:5173 (proxies /api to backend)
 npm run build        # production build to dist/
@@ -52,13 +53,14 @@ backend/
     middleware/           — auth (JWT), error handling
   migrations/            — SQL migrations (sqlx)
   tests/                 — integration tests
-src/
-  App.jsx               — Router setup
-  stores/               — Zustand stores (auth, routine, chat)
-  api/                   — API client + endpoint modules
-  hooks/                 — Custom hooks (useMediaQuery, useSSE, useRoutine)
-  components/            — UI components organized by domain
-  pages/                 — Page-level components
+frontend/
+  src/
+    App.jsx               — Router setup
+    stores/               — Zustand stores (auth, routine, chat)
+    api/                   — API client + endpoint modules
+    hooks/                 — Custom hooks (useMediaQuery, useSSE, useRoutine)
+    components/            — UI components organized by domain
+    pages/                 — Page-level components
 docs/
   api.md                — REST API contract
   schema.md             — Database schema reference
@@ -72,7 +74,7 @@ Development is organized via specialized agents in `.claude/agents/`:
 |-------|-------|------|
 | `manager` | `/docs/**` | Orchestrates all agents, breaks features into tasks |
 | `backend` | `/backend/**` | Rust/Axum routes, DB queries, auth |
-| `frontend` | `/src/**` | React components, stores, Tailwind |
+| `frontend` | `/frontend/**` | React components, stores, Tailwind |
 | `ai-prompt` | `/backend/src/ai/**` | LLM providers, prompts, tool schemas |
 | `database` | `/backend/migrations/**` | SQL migrations, seeds, indexes |
 | `infra` | `Dockerfile, CI, fly.toml` | Docker, CI/CD, deployment |
@@ -99,5 +101,5 @@ Block type colors defined in COLORS object — 7 types: trabalho, mestrado, aula
 
 ## Data
 
-- `src/rotina.json` — Original static data (kept as reference/seed data)
+- `frontend/src/rotina.json` — Original static data (kept as reference/seed data)
 - Database is the source of truth once backend is running

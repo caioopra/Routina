@@ -47,7 +47,7 @@ When the user requests a feature:
 ## Key Project Context
 
 - **Backend:** Rust (Axum) + PostgreSQL (sqlx) in `/backend/`
-- **Frontend:** React 18 + Vite + Tailwind CSS v4 in `/src/`
+- **Frontend:** React 18 + Vite + Tailwind CSS v4 in `/frontend/`
 - **LLM providers:** Gemini (primary, free tier) + Claude (secondary), provider-agnostic trait in `/backend/src/ai/`
 - **Design:** Dark purple palette, fonts: Outfit (display), DM Sans (body), JetBrains Mono (mono)
 - **Testing:** Unit tests in-file for Rust, integration tests in `/backend/tests/`, Vitest + RTL for frontend

@@ -50,7 +50,7 @@ Design and maintain the PostgreSQL schema: write SQL migrations, seed scripts, o
 ## File Access
 
 - **Read/Write:** `/backend/migrations/**`, `/docs/schema.md`
-- **Read only:** `/backend/src/models/**` (to understand how the app uses the schema), `/src/rotina.json` (for seed data structure)
+- **Read only:** `/backend/src/models/**` (to understand how the app uses the schema), `/frontend/src/rotina.json` (for seed data structure)
 - **Cannot touch:** Application code (Rust source, React components)
 
 ## Commands

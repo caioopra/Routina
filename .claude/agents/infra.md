@@ -71,4 +71,4 @@ Manage deployment configuration, containerization, CI/CD pipelines, and local de
 
 - **Read/Write:** `Dockerfile`, `docker-compose.yml`, `.github/**`, `fly.toml`, `scripts/**`, `.env.example`
 - **Read only:** `backend/Cargo.toml` (for Rust version), `package.json` (for Node version)
-- **Cannot touch:** Application source code (`/backend/src/`, `/src/`)
+- **Cannot touch:** Application source code (`/backend/src/`, `/frontend/`)

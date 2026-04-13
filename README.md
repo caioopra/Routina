@@ -35,6 +35,7 @@ cd backend
 cargo run
 
 # Frontend (in another terminal)
+cd frontend
 npm install
 npm run dev
 ```
@@ -51,7 +52,8 @@ backend/       Rust/Axum API server
     ai/        LLM provider integrations
     middleware/ Auth, error handling
   migrations/  PostgreSQL schema
-src/           React frontend
+frontend/      React frontend
+  src/
 docs/          API contract & schema reference
 ```
 

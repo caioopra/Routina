@@ -55,7 +55,7 @@ Write idiomatic Rust:
 
 - **Read/Write:** `/backend/**`
 - **Read only:** `/docs/api.md` (API contract — the manager agent or you updates this when adding endpoints)
-- **Cannot touch:** `/src/` (frontend), `.env` files (secrets)
+- **Cannot touch:** `/frontend/` (frontend), `.env` files (secrets)
 
 ## Commands
 

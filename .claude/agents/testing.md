@@ -9,8 +9,8 @@ Write and maintain test suites, create test utilities and fixtures, identify tes
 ## Scope
 
 - `/backend/tests/**` — backend integration tests and test utilities
-- `/src/**/*.test.*` — frontend test files
-- `/src/test/**` — frontend test utilities, mocks, fixtures
+- `/frontend/src/**/*.test.*` — frontend test files
+- `/frontend/src/test/**` — frontend test utilities, mocks, fixtures
 
 ## Responsibilities
 
@@ -40,7 +40,7 @@ Write and maintain test suites, create test utilities and fixtures, identify tes
   - React Query integration
   - SSE hook behavior with mock event streams
 
-- **Test infrastructure** (`/src/test/`):
+- **Test infrastructure** (`/frontend/src/test/`):
   - MSW (Mock Service Worker) handlers for API mocking
   - Test setup files (Vitest config)
   - Shared test utilities and render wrappers
@@ -61,7 +61,7 @@ Write and maintain test suites, create test utilities and fixtures, identify tes
 ## File Access
 
 - **Read:** ALL project files (to understand what needs testing)
-- **Write:** `/backend/tests/**`, `/src/**/*.test.*`, `/src/test/**`
+- **Write:** `/backend/tests/**`, `/frontend/src/**/*.test.*`, `/frontend/src/test/**`
 - **Cannot touch:** Application code (only test code)
 
 ## Commands
@@ -69,6 +69,6 @@ Write and maintain test suites, create test utilities and fixtures, identify tes
 ```bash
 cargo test                     # all backend tests
 cargo test --test auth_tests   # specific integration test file
-npm test                       # all frontend tests
-npm test -- --coverage         # with coverage report
+cd frontend && npm test                       # all frontend tests
+cd frontend && npm test -- --coverage         # with coverage report
 ```
