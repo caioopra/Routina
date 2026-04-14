@@ -4,6 +4,14 @@ let users = new Map();
 let tokenCounter = 0;
 const refreshTokens = new Map();
 
+let routines = [];
+let routineCounter = 0;
+
+export function seedRoutines(initial) {
+  routines = initial.map((r) => ({ ...r }));
+  routineCounter = routines.length;
+}
+
 function issueTokens(user) {
   tokenCounter += 1;
   const token = `token-${tokenCounter}`;
@@ -16,6 +24,13 @@ export function resetMockState() {
   users = new Map();
   tokenCounter = 0;
   refreshTokens.clear();
+  routines = [];
+  routineCounter = 0;
+}
+
+function requireAuth(request) {
+  const auth = request.headers.get("Authorization") || "";
+  return auth.startsWith("Bearer ") && auth.slice(7).length > 0;
 }
 
 export const handlers = [
@@ -93,6 +108,88 @@ export const handlers = [
     }
     const tokens = issueTokens(user);
     return HttpResponse.json(tokens);
+  }),
+
+  http.get("/api/routines", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return HttpResponse.json(routines);
+  }),
+
+  http.post("/api/routines", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    if (!body.name) {
+      return HttpResponse.json({ error: "Missing name" }, { status: 422 });
+    }
+    routineCounter += 1;
+    const routine = {
+      id: `routine-${routineCounter}`,
+      name: body.name,
+      period: body.period ?? "weekly",
+      meta: body.meta ?? {},
+      is_active: routines.length === 0,
+    };
+    routines.push(routine);
+    return HttpResponse.json(routine, { status: 201 });
+  }),
+
+  http.get("/api/routines/:id", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const routine = routines.find((r) => r.id === params.id);
+    if (!routine) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return HttpResponse.json({
+      ...routine,
+      blocks: [],
+      rules: [],
+      summary: [],
+    });
+  }),
+
+  http.put("/api/routines/:id", async ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const routine = routines.find((r) => r.id === params.id);
+    if (!routine) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const body = (await request.json()) || {};
+    if (body.name !== undefined) routine.name = body.name;
+    if (body.period !== undefined) routine.period = body.period;
+    if (body.meta !== undefined) routine.meta = body.meta;
+    return HttpResponse.json(routine);
+  }),
+
+  http.post("/api/routines/:id/activate", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const routine = routines.find((r) => r.id === params.id);
+    if (!routine) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    routines = routines.map((r) => ({ ...r, is_active: r.id === params.id }));
+    return HttpResponse.json(routines.find((r) => r.id === params.id));
+  }),
+
+  http.delete("/api/routines/:id", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const idx = routines.findIndex((r) => r.id === params.id);
+    if (idx === -1) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    routines.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
   }),
 
   http.get("/api/auth/me", ({ request }) => {

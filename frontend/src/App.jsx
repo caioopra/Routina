@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import Planner from "./Planner.jsx";
+import Routines from "./pages/Routines.jsx";
 import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
 
 const queryClient = new QueryClient({
@@ -26,6 +27,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Planner />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/routines"
+            element={
+              <ProtectedRoute>
+                <Routines />
               </ProtectedRoute>
             }
           />
