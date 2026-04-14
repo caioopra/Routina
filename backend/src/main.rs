@@ -1,9 +1,4 @@
-mod config;
-mod db;
-mod middleware;
-mod models;
-mod routes;
-
+use planner_backend::{config, db, routes};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
