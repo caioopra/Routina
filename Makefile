@@ -7,15 +7,17 @@ install: ## Install backend + frontend dependencies
 	cd frontend && npm install
 	cd backend && cargo build
 
-db-up: ## Start PostgreSQL via docker-compose
-	docker-compose up -d
+DOCKER_COMPOSE ?= docker compose
+
+db-up: ## Start PostgreSQL via docker compose
+	$(DOCKER_COMPOSE) up -d
 
 db-down: ## Stop PostgreSQL
-	docker-compose down
+	$(DOCKER_COMPOSE) down
 
 db-reset: ## Drop, recreate, and migrate the database
-	docker-compose down -v
-	docker-compose up -d
+	$(DOCKER_COMPOSE) down -v
+	$(DOCKER_COMPOSE) up -d
 	sleep 2
 	cd backend && cargo sqlx migrate run
 
