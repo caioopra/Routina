@@ -67,7 +67,7 @@ pub async fn register_test_user(app: &Router, email: &str, password: &str) -> Va
     let (status, body) = json_oneshot(
         app,
         Method::POST,
-        "/auth/register",
+        "/api/auth/register",
         Some(json!({ "email": email, "name": "Test", "password": password })),
         None,
     )

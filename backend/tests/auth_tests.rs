@@ -60,7 +60,7 @@ async fn register_with_duplicate_email_returns_409(pool: PgPool) {
     let (status, _) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/register",
+        "/api/auth/register",
         Some(json!({ "email": "dup@example.com", "name": "Other", "password": "longenoughpass" })),
         None,
     )
@@ -75,7 +75,7 @@ async fn register_with_short_password_returns_422(pool: PgPool) {
     let (status, _) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/register",
+        "/api/auth/register",
         Some(json!({ "email": "short@example.com", "name": "Test", "password": "short" })),
         None,
     )
@@ -92,7 +92,7 @@ async fn login_with_correct_password_returns_tokens(pool: PgPool) {
     let (status, body) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/login",
+        "/api/auth/login",
         Some(json!({ "email": "login@example.com", "password": "longenoughpass" })),
         None,
     )
@@ -112,7 +112,7 @@ async fn login_with_wrong_password_returns_401(pool: PgPool) {
     let (status, _) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/login",
+        "/api/auth/login",
         Some(json!({ "email": "wrongpw@example.com", "password": "wrong-password" })),
         None,
     )
@@ -127,7 +127,7 @@ async fn login_with_unknown_email_returns_401(pool: PgPool) {
     let (status, _) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/login",
+        "/api/auth/login",
         Some(json!({ "email": "ghost@example.com", "password": "longenoughpass" })),
         None,
     )
@@ -145,7 +145,7 @@ async fn refresh_returns_new_tokens(pool: PgPool) {
     let (status, body) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/refresh",
+        "/api/auth/refresh",
         Some(json!({ "refresh_token": refresh_token })),
         None,
     )
@@ -172,7 +172,7 @@ async fn refresh_with_access_token_returns_401(pool: PgPool) {
     let (status, _) = json_oneshot(
         &app,
         Method::POST,
-        "/auth/refresh",
+        "/api/auth/refresh",
         Some(json!({ "refresh_token": access_token })),
         None,
     )
@@ -187,7 +187,7 @@ async fn me_with_valid_token_returns_user(pool: PgPool) {
     let register = register_test_user(&app, "me@example.com", "longenoughpass").await;
     let token = register["token"].as_str().unwrap();
 
-    let (status, body) = json_oneshot(&app, Method::GET, "/auth/me", None, Some(token)).await;
+    let (status, body) = json_oneshot(&app, Method::GET, "/api/auth/me", None, Some(token)).await;
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["email"], "me@example.com");
@@ -199,7 +199,7 @@ async fn me_with_valid_token_returns_user(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn me_without_token_returns_401(pool: PgPool) {
     let app = build_app(pool);
-    let (status, _) = json_oneshot(&app, Method::GET, "/auth/me", None, None).await;
+    let (status, _) = json_oneshot(&app, Method::GET, "/api/auth/me", None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -209,7 +209,8 @@ async fn me_with_refresh_token_returns_401(pool: PgPool) {
     let register = register_test_user(&app, "refuse@example.com", "longenoughpass").await;
     let refresh_token = register["refresh_token"].as_str().unwrap();
 
-    let (status, _) = json_oneshot(&app, Method::GET, "/auth/me", None, Some(refresh_token)).await;
+    let (status, _) =
+        json_oneshot(&app, Method::GET, "/api/auth/me", None, Some(refresh_token)).await;
 
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

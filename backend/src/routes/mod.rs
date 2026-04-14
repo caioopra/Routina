@@ -7,9 +7,12 @@ pub mod auth;
 pub mod health;
 
 pub fn create_router(pool: PgPool, config: Config) -> Router {
-    Router::new()
+    let api = Router::new()
         .nest("/health", health::router())
-        .nest("/auth", auth::router())
+        .nest("/auth", auth::router());
+
+    Router::new()
+        .nest("/api", api)
         .with_state(AppState { pool, config })
 }
 
