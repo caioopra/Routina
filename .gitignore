@@ -21,3 +21,6 @@ backend/.sqlx
 # OS
 .DS_Store
 Thumbs.db
+
+# Dev-only local previews / scratch
+temp/

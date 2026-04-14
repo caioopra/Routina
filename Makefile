@@ -60,3 +60,6 @@ clean: ## Remove build artifacts
 
 deploy: ## Deploy to fly.io
 	fly deploy
+
+preview: ## Regenerate the standalone rotina.json preview at temp/index.html
+	./scripts/build-preview.sh
