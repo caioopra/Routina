@@ -1,4 +1,7 @@
 import "@testing-library/jest-dom";
+import { afterAll, afterEach, beforeAll } from "vitest";
+import { server } from "./mocks/server";
+import { resetMockState } from "./mocks/handlers";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -13,3 +16,13 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => {},
   }),
 });
+
+beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+
+afterEach(() => {
+  server.resetHandlers();
+  resetMockState();
+  localStorage.clear();
+});
+
+afterAll(() => server.close());

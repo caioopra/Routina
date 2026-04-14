@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  /* Surface depth tokens */
+  --color-base: #08060f;
+  --color-surface: #0f0c1a;
+  --color-raised: #161227;
+  --color-overlay: #1e1836;
+  --color-border: #2a2242;
+  --color-border-subtle: #1c1733;
+
+  /* Text */
+  --color-text-primary: #eeedf5;
+  --color-text-secondary: #a8a3c0;
+  --color-text-muted: #6e6890;
+
+  /* Accent */
+  --color-accent: #8b5cf6;
+  --color-accent-dim: #6d45d9;
+
+  /* Block type colors — trabalho (blue) */
+  --color-trabalho-bg: #1e3a5f;
+  --color-trabalho-text: #93c5fd;
+  --color-trabalho-border: #2563eb;
+
+  /* Block type colors — mestrado (purple) */
+  --color-mestrado-bg: #3b1f4a;
+  --color-mestrado-text: #d8b4fe;
+  --color-mestrado-border: #7c3aed;
+
+  /* Block type colors — aula (orange) */
+  --color-aula-bg: #4a2c1b;
+  --color-aula-text: #fdba74;
+  --color-aula-border: #ea580c;
+
+  /* Block type colors — exercicio (green) */
+  --color-exercicio-bg: #1a3a2a;
+  --color-exercicio-text: #86efac;
+  --color-exercicio-border: #16a34a;
+
+  /* Block type colors — slides (yellow) */
+  --color-slides-bg: #4a3f1b;
+  --color-slides-text: #fde68a;
+  --color-slides-border: #ca8a04;
+
+  /* Block type colors — viagem (gray) */
+  --color-viagem-bg: #3b3b3b;
+  --color-viagem-text: #d4d4d4;
+  --color-viagem-border: #737373;
+
+  /* Block type colors — livre (cyan) */
+  --color-livre-bg: #1e2d3d;
+  --color-livre-text: #7dd3fc;
+  --color-livre-border: #0284c7;
+
+  /* Fonts */
+  --font-display: "Outfit", sans-serif;
+  --font-body: "DM Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
