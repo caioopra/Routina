@@ -44,15 +44,25 @@ Create a new routine.
 - **Response:** `{ id, name, period, is_active, meta, created_at }`
 
 ### `GET /api/routines/:id`
-Get routine with all blocks.
-- **Response:** `{ id, name, period, is_active, meta, blocks: [...], rules: [...], summary: [...] }`
+Get a routine. In this slice, `blocks`, `rules`, and `summary` are returned as empty arrays and will be populated by later features.
+- **Response:** `{ id, name, period, is_active, meta, blocks: [], rules: [], summary: [], created_at, updated_at }`
+- **Errors:** 404 (not found or not owned by user)
 
 ### `PUT /api/routines/:id`
 Update routine metadata.
-- **Request:** `{ name?, period?, is_active?, meta? }`
+- **Request:** `{ name?, period?, meta? }` (use `/activate` to change `is_active`)
+- **Response:** full routine object
+- **Errors:** 404
+
+### `POST /api/routines/:id/activate`
+Mark this routine active and deactivate any other routine of the same user.
+- **Response:** `{ id, name, period, is_active: true, meta, created_at, updated_at }`
+- **Errors:** 404
 
 ### `DELETE /api/routines/:id`
 Delete routine and all associated data.
+- **Response:** 204 No Content
+- **Errors:** 404
 
 ---
 

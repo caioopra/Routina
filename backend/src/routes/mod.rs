@@ -5,11 +5,13 @@ use crate::config::Config;
 
 pub mod auth;
 pub mod health;
+pub mod routines;
 
 pub fn create_router(pool: PgPool, config: Config) -> Router {
     let api = Router::new()
         .nest("/health", health::router())
-        .nest("/auth", auth::router());
+        .nest("/auth", auth::router())
+        .nest("/routines", routines::router());
 
     Router::new()
         .nest("/api", api)
