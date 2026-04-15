@@ -49,7 +49,11 @@ export default function ChatPanel({ routineId, onClose }) {
 
   const messageListRef = useRef(null);
 
-  const { start: startSSE } = useSSE("/api/chat/message");
+  const cancelStreaming = useChatStore((s) => s.cancelStreaming);
+  const getLastUserMessage = useChatStore((s) => s.getLastUserMessage);
+  const popLastUserMessage = useChatStore((s) => s.popLastUserMessage);
+
+  const { start: startSSE, cancel: cancelSSE } = useSSE("/api/chat/message");
 
   // Load conversations for this routine on mount
   useEffect(() => {
@@ -151,6 +155,27 @@ export default function ChatPanel({ routineId, onClose }) {
     );
   }
 
+  function handleCancel() {
+    cancelSSE();
+    cancelStreaming();
+  }
+
+  function handleRetry() {
+    clearError();
+    const lastMsg = getLastUserMessage();
+    if (!lastMsg) return;
+    // Remove the existing optimistic user bubble so handleSend doesn't duplicate it.
+    popLastUserMessage(lastMsg.content);
+    handleSend(lastMsg.content);
+  }
+
+  const UNDO_PHRASE = "desfazer a última ação";
+
+  function handleUndo() {
+    if (streaming || !activeConversationId) return;
+    handleSend(UNDO_PHRASE);
+  }
+
   const activeMessages = activeConversationId
     ? (messages[activeConversationId] ?? [])
     : [];
@@ -212,6 +237,24 @@ export default function ChatPanel({ routineId, onClose }) {
 
           <div className="flex items-center gap-2">
             <ProviderToggle />
+            <button
+              type="button"
+              onClick={handleUndo}
+              disabled={streaming || !activeConversationId}
+              aria-label="Undo last action"
+              className="text-xs px-2 py-1 rounded-lg transition-all"
+              style={{
+                background: "rgba(139,92,246,0.08)",
+                color:
+                  streaming || !activeConversationId ? "#4a4270" : "#a78bfa",
+                border: "1px solid rgba(139,92,246,0.15)",
+                cursor:
+                  streaming || !activeConversationId ? "default" : "pointer",
+                opacity: streaming || !activeConversationId ? 0.5 : 1,
+              }}
+            >
+              Undo
+            </button>
             <button
               type="button"
               onClick={() => setContextEditorOpen(true)}
@@ -343,26 +386,49 @@ export default function ChatPanel({ routineId, onClose }) {
             {error && (
               <div
                 role="alert"
-                className="mx-4 mb-2 text-xs px-3 py-2 rounded-lg flex items-center justify-between"
+                className="mx-4 mb-2 text-xs px-3 py-2 rounded-lg flex items-center justify-between gap-2"
                 style={{
                   background: "rgba(239,68,68,0.1)",
                   border: "1px solid rgba(239,68,68,0.25)",
                   color: "#f87171",
                 }}
               >
-                <span>{error}</span>
-                <button
-                  type="button"
-                  onClick={clearError}
-                  aria-label="Dismiss error"
-                  className="ml-2 text-xs"
-                >
-                  ×
-                </button>
+                <span className="flex-1">{error}</span>
+                <div className="flex items-center gap-1 shrink-0">
+                  {getLastUserMessage() && (
+                    <button
+                      type="button"
+                      onClick={handleRetry}
+                      aria-label="Retry last message"
+                      className="text-xs px-2 py-0.5 rounded-md transition-all"
+                      style={{
+                        background: "rgba(239,68,68,0.15)",
+                        border: "1px solid rgba(239,68,68,0.3)",
+                        color: "#fca5a5",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Retry
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={clearError}
+                    aria-label="Dismiss error"
+                    className="text-xs"
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
             )}
 
-            <Composer onSend={handleSend} disabled={streaming} />
+            <Composer
+              onSend={handleSend}
+              onCancel={handleCancel}
+              disabled={streaming}
+              streaming={streaming}
+            />
           </div>
         </div>
       </div>

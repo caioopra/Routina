@@ -194,11 +194,57 @@ export const useChatStore = create((set, get) => ({
     }));
   },
 
+  /**
+   * cancelStreaming — called when the user aborts an in-flight SSE stream.
+   * Treats the abort as a silent cancel: streaming stops, no error banner.
+   */
+  cancelStreaming: () => {
+    set({ streaming: false, pendingTokens: "" });
+  },
+
+  /**
+   * popLastUserMessage — removes the most recent user message for the active
+   * conversation when it matches the given text.  Used by handleRetry to avoid
+   * duplicating the optimistic message before re-sending.
+   */
+  popLastUserMessage: (text) => {
+    const { activeConversationId, messages } = get();
+    if (!activeConversationId) return;
+    const msgs = messages[activeConversationId] ?? [];
+    // Find the last user message; if its content matches, remove it.
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        if (msgs[i].content === text) {
+          const updated = [...msgs.slice(0, i), ...msgs.slice(i + 1)];
+          set((s) => ({
+            messages: { ...s.messages, [activeConversationId]: updated },
+          }));
+        }
+        // Only check the last user message; stop regardless of match.
+        break;
+      }
+    }
+  },
+
   setStreamingError: (errorMsg) => {
     set({ streaming: false, pendingTokens: "", error: errorMsg });
   },
 
   clearError: () => set({ error: null }),
+
+  /**
+   * lastUserMessage — returns the most recent user message for the active
+   * conversation, or null if none exists.
+   */
+  getLastUserMessage: () => {
+    const { activeConversationId, messages } = get();
+    if (!activeConversationId) return null;
+    const msgs = messages[activeConversationId] ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "user") return msgs[i];
+    }
+    return null;
+  },
 }));
 
 export default useChatStore;

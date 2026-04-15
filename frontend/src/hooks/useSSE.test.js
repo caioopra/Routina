@@ -201,4 +201,60 @@ describe("useSSE", () => {
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current.error).toContain("Provider unavailable");
   });
+
+  // ── cancel/done race (Fix 1) ───────────────────────────────────────────────
+
+  it("cancel() before done fires: onDone is NOT called", async () => {
+    // Build a stream that emits a token chunk and then a done event as two
+    // separate enqueue calls so we can interleave cancel() between them.
+    const encoder = new TextEncoder();
+    let resolveSecondChunk;
+    const secondChunkReady = new Promise((res) => {
+      resolveSecondChunk = res;
+    });
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        controller.enqueue(encoder.encode('event: token\ndata: "hello"\n\n'));
+        // Wait until the test calls resolveSecondChunk (after cancel)
+        await secondChunkReady;
+        controller.enqueue(encoder.encode("event: done\ndata: {}\n\n"));
+        controller.close();
+      },
+    });
+
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: stream,
+    });
+
+    const onDone = vi.fn();
+    const { result } = renderHook(() => useSSE("/api/chat/message"));
+
+    act(() => {
+      result.current.start({ message: "test" }, { onDone });
+    });
+
+    // Let the first token chunk be processed
+    await waitFor(() => expect(result.current.tokens).toHaveLength(1));
+
+    // Cancel before the done chunk arrives
+    act(() => {
+      result.current.cancel();
+    });
+
+    // Now release the done chunk
+    resolveSecondChunk();
+
+    // Give microtasks a moment to settle
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    // onDone must NOT have been called
+    expect(onDone).not.toHaveBeenCalled();
+    // Status must be idle (set by cancel), not done
+    expect(result.current.status).toBe("idle");
+  });
 });

@@ -19,8 +19,13 @@ export function useSSE(url) {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
   const abortRef = useRef(null);
+  // cancelledRef is set by cancel() and checked inside the reading loop so that
+  // onEvent/onDone callbacks are never fired after the user cancels, even if a
+  // "done" event lands in the same microtask tick.
+  const cancelledRef = useRef(false);
 
   const cancel = useCallback(() => {
+    cancelledRef.current = true;
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
@@ -39,6 +44,9 @@ export function useSSE(url) {
   const start = useCallback(
     async (body, callbacks = {}) => {
       const { onEvent, onDone } = callbacks;
+
+      // Reset the cancelled flag for this new stream
+      cancelledRef.current = false;
 
       // Cancel any in-flight stream
       if (abortRef.current) {
@@ -118,6 +126,9 @@ export function useSSE(url) {
               parsed = dataLine;
             }
 
+            // Skip callbacks if the stream was cancelled between events
+            if (cancelledRef.current) return;
+
             if (onEvent) {
               onEvent(eventType, parsed);
             }
@@ -143,6 +154,7 @@ export function useSSE(url) {
         }
 
         // Stream ended without explicit done event
+        if (cancelledRef.current) return;
         setStatus("done");
         if (onDone) onDone(null);
       } catch (err) {

@@ -397,4 +397,141 @@ describe("chatStore", () => {
     useChatStore.getState().setProvider("claude");
     expect(useChatStore.getState().provider).toBe("claude");
   });
+
+  // ── cancelStreaming ────────────────────────────────────────────────────────
+
+  it("cancelStreaming sets streaming=false and clears pendingTokens without setting error", () => {
+    useChatStore.setState({
+      streaming: true,
+      pendingTokens: "partial response so far",
+    });
+    useChatStore.getState().cancelStreaming();
+    const state = useChatStore.getState();
+    expect(state.streaming).toBe(false);
+    expect(state.pendingTokens).toBe("");
+    expect(state.error).toBeNull();
+  });
+
+  // ── getLastUserMessage ─────────────────────────────────────────────────────
+
+  it("getLastUserMessage returns the most recent user message", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+    useChatStore.setState({
+      messages: {
+        [conv.id]: [
+          { id: "m-1", role: "user", content: "First message", created_at: "" },
+          {
+            id: "m-2",
+            role: "assistant",
+            content: "Response",
+            created_at: "",
+          },
+          {
+            id: "m-3",
+            role: "user",
+            content: "Second message",
+            created_at: "",
+          },
+        ],
+      },
+    });
+
+    const msg = useChatStore.getState().getLastUserMessage();
+    expect(msg).not.toBeNull();
+    expect(msg.content).toBe("Second message");
+  });
+
+  it("getLastUserMessage returns null when messages contain only assistant messages", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+    useChatStore.setState({
+      messages: {
+        [conv.id]: [
+          {
+            id: "m-1",
+            role: "assistant",
+            content: "Hello!",
+            created_at: "",
+          },
+        ],
+      },
+    });
+
+    const msg = useChatStore.getState().getLastUserMessage();
+    expect(msg).toBeNull();
+  });
+
+  it("getLastUserMessage returns null when there is no active conversation", () => {
+    useChatStore.setState({ activeConversationId: null, messages: {} });
+    const msg = useChatStore.getState().getLastUserMessage();
+    expect(msg).toBeNull();
+  });
+
+  it("getLastUserMessage returns null when messages array is empty", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+    // messages[conv.id] is already [] from createConversation
+    const msg = useChatStore.getState().getLastUserMessage();
+    expect(msg).toBeNull();
+  });
+
+  // ── popLastUserMessage (Fix 3) ─────────────────────────────────────────────
+
+  it("popLastUserMessage removes the last user message when text matches", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+    useChatStore.setState({
+      messages: {
+        [conv.id]: [
+          { id: "m-1", role: "user", content: "First", created_at: "" },
+          { id: "m-2", role: "user", content: "Second", created_at: "" },
+        ],
+      },
+    });
+
+    useChatStore.getState().popLastUserMessage("Second");
+
+    const msgs = useChatStore.getState().messages[conv.id];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe("First");
+  });
+
+  it("popLastUserMessage is a no-op when text does not match last user message", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+    useChatStore.setState({
+      messages: {
+        [conv.id]: [
+          { id: "m-1", role: "user", content: "Original", created_at: "" },
+        ],
+      },
+    });
+
+    useChatStore.getState().popLastUserMessage("Different text");
+
+    const msgs = useChatStore.getState().messages[conv.id];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe("Original");
+  });
+
+  it("popLastUserMessage is a no-op when there is no active conversation", () => {
+    useChatStore.setState({ activeConversationId: null, messages: {} });
+    // Should not throw
+    useChatStore.getState().popLastUserMessage("anything");
+    expect(Object.keys(useChatStore.getState().messages)).toHaveLength(0);
+  });
+
+  it("popLastUserMessage skips assistant messages to find the last user message", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+    useChatStore.setState({
+      messages: {
+        [conv.id]: [
+          { id: "m-1", role: "user", content: "Ask", created_at: "" },
+          { id: "m-2", role: "assistant", content: "Reply", created_at: "" },
+        ],
+      },
+    });
+
+    useChatStore.getState().popLastUserMessage("Ask");
+
+    const msgs = useChatStore.getState().messages[conv.id];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].role).toBe("assistant");
+  });
 });

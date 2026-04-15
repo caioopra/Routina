@@ -88,13 +88,23 @@ describe("ChatPanel", () => {
     );
   });
 
-  it("disables the send button while streaming", async () => {
+  it("shows Stop button (not Send) while streaming, and textarea is disabled", async () => {
     // Manually set streaming state
     useChatStore.setState({ streaming: true });
     renderPanel();
 
-    const sendBtn = screen.getByRole("button", { name: /send message/i });
-    expect(sendBtn).toBeDisabled();
+    // Send is replaced by Stop when streaming
+    expect(
+      screen.queryByRole("button", { name: /send message/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /stop streaming/i }),
+    ).toBeInTheDocument();
+
+    // Textarea is still disabled
+    expect(
+      screen.getByRole("textbox", { name: /message input/i }),
+    ).toBeDisabled();
   });
 
   it("toggles the conversation list sidebar", async () => {
@@ -242,5 +252,271 @@ describe("ChatPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /gemini/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /claude/i })).toBeInTheDocument();
+  });
+
+  // ── Stream-cancel (Task 1) ─────────────────────────────────────────────────
+
+  it("shows Stop button instead of Send while streaming", () => {
+    useChatStore.setState({ streaming: true });
+    renderPanel();
+
+    expect(
+      screen.getByRole("button", { name: /stop streaming/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /send message/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Stop ends streaming and does not show an error banner", async () => {
+    const user = userEvent.setup();
+    useChatStore.setState({
+      streaming: true,
+      activeConversationId: "conv-x",
+      conversations: [
+        { id: "conv-x", routine_id: "routine-1", title: null, created_at: "" },
+      ],
+    });
+    renderPanel();
+
+    const stopBtn = screen.getByRole("button", { name: /stop streaming/i });
+    await user.click(stopBtn);
+
+    await waitFor(() => {
+      expect(useChatStore.getState().streaming).toBe(false);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // ── Error retry (Task 2) ───────────────────────────────────────────────────
+
+  it("shows Retry button inside the error banner when a prior user message exists", () => {
+    useChatStore.setState({
+      error: "Something went wrong",
+      activeConversationId: "conv-r",
+      messages: {
+        "conv-r": [
+          {
+            id: "m-1",
+            role: "user",
+            content: "Please add a block",
+            created_at: "",
+          },
+        ],
+      },
+    });
+    renderPanel();
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /retry last message/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("Retry button is hidden when no prior user message exists", () => {
+    useChatStore.setState({
+      error: "Something went wrong",
+      activeConversationId: "conv-r2",
+      messages: { "conv-r2": [] },
+    });
+    renderPanel();
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /retry last message/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clicking Retry resends the last user message text", async () => {
+    const user = userEvent.setup();
+    useChatStore.setState({
+      error: "Connection error",
+      activeConversationId: "conv-retry",
+      conversations: [
+        {
+          id: "conv-retry",
+          routine_id: "routine-1",
+          title: null,
+          created_at: "",
+        },
+      ],
+      messages: {
+        "conv-retry": [
+          {
+            id: "u-1",
+            role: "user",
+            content: "Help me plan my week",
+            created_at: "",
+          },
+        ],
+      },
+    });
+    renderPanel();
+
+    const retryBtn = screen.getByRole("button", {
+      name: /retry last message/i,
+    });
+    await user.click(retryBtn);
+
+    // Error banner clears immediately on click
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    // The retry sends as an optimistic user bubble, then eventually resolves
+    await waitFor(
+      () => {
+        // The mock SSE should resolve and assistant reply appear
+        expect(screen.getByText(/sure!/i)).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  // ── handleRetry clears error first (Fix 2) ───────────────────────────────
+
+  it("handleRetry clears the error state before resending", async () => {
+    const user = userEvent.setup();
+    useChatStore.setState({
+      error: "Connection error",
+      activeConversationId: "conv-fix2",
+      conversations: [
+        {
+          id: "conv-fix2",
+          routine_id: "routine-1",
+          title: null,
+          created_at: "",
+        },
+      ],
+      messages: {
+        "conv-fix2": [
+          {
+            id: "u-fix2",
+            role: "user",
+            content: "Help me plan",
+            created_at: "",
+          },
+        ],
+      },
+    });
+    renderPanel();
+
+    // Error banner is visible
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /retry last message/i }),
+    );
+
+    // Error must be null immediately after click (clearError runs first)
+    expect(useChatStore.getState().error).toBeNull();
+    // Banner is gone from DOM
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  // ── handleRetry does not duplicate user message (Fix 3) ──────────────────
+
+  it("handleRetry does not add a second user bubble", async () => {
+    const user = userEvent.setup();
+    useChatStore.setState({
+      error: "Stream error",
+      activeConversationId: "conv-nodup",
+      conversations: [
+        {
+          id: "conv-nodup",
+          routine_id: "routine-1",
+          title: null,
+          created_at: "",
+        },
+      ],
+      messages: {
+        "conv-nodup": [
+          {
+            id: "u-nodup",
+            role: "user",
+            content: "Add a block please",
+            created_at: "",
+          },
+        ],
+      },
+    });
+    renderPanel();
+
+    await user.click(
+      screen.getByRole("button", { name: /retry last message/i }),
+    );
+
+    // Wait for the stream to finalize so messages stabilize
+    await waitFor(
+      () => {
+        expect(screen.getByText(/sure!/i)).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+
+    // There must be exactly ONE "Add a block please" bubble
+    const bubbles = screen.getAllByText("Add a block please");
+    expect(bubbles).toHaveLength(1);
+  });
+
+  // ── Undo shortcut (Task 3) ─────────────────────────────────────────────────
+
+  it("renders Undo button in header", () => {
+    renderPanel();
+    expect(
+      screen.getByRole("button", { name: /undo last action/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("Undo button is disabled when streaming is true", () => {
+    useChatStore.setState({
+      streaming: true,
+      activeConversationId: "conv-u",
+    });
+    renderPanel();
+
+    expect(
+      screen.getByRole("button", { name: /undo last action/i }),
+    ).toBeDisabled();
+  });
+
+  it("Undo button is disabled when there is no active conversation", () => {
+    useChatStore.setState({
+      streaming: false,
+      activeConversationId: null,
+    });
+    renderPanel();
+
+    expect(
+      screen.getByRole("button", { name: /undo last action/i }),
+    ).toBeDisabled();
+  });
+
+  it("clicking Undo sends the undo phrase through the chat", async () => {
+    const user = userEvent.setup();
+    useChatStore.setState({
+      streaming: false,
+      activeConversationId: "conv-undo",
+      conversations: [
+        {
+          id: "conv-undo",
+          routine_id: "routine-1",
+          title: null,
+          created_at: "",
+        },
+      ],
+      messages: { "conv-undo": [] },
+    });
+    renderPanel();
+
+    const undoBtn = screen.getByRole("button", { name: /undo last action/i });
+    await user.click(undoBtn);
+
+    // The undo phrase should appear as a user bubble
+    await waitFor(() => {
+      expect(screen.getByText("desfazer a última ação")).toBeInTheDocument();
+    });
   });
 });
