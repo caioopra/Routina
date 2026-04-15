@@ -4,6 +4,7 @@ import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import Planner from "./Planner.jsx";
 import Routines from "./pages/Routines.jsx";
+import RoutineDetail from "./pages/RoutineDetail.jsx";
 import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
 
 const queryClient = new QueryClient({
@@ -35,6 +36,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Routines />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/routines/:id"
+            element={
+              <ProtectedRoute>
+                <RoutineDetail />
               </ProtectedRoute>
             }
           />

@@ -7,9 +7,33 @@ const refreshTokens = new Map();
 let routines = [];
 let routineCounter = 0;
 
+let blocks = [];
+let blockCounter = 0;
+
+let labels = [];
+let labelCounter = 0;
+
+let rules = [];
+let ruleCounter = 0;
+
 export function seedRoutines(initial) {
   routines = initial.map((r) => ({ ...r }));
   routineCounter = routines.length;
+}
+
+export function seedBlocks(initial) {
+  blocks = initial.map((b) => ({ ...b }));
+  blockCounter = blocks.length;
+}
+
+export function seedLabels(initial) {
+  labels = initial.map((l) => ({ ...l }));
+  labelCounter = labels.length;
+}
+
+export function seedRules(initial) {
+  rules = initial.map((r) => ({ ...r }));
+  ruleCounter = rules.length;
 }
 
 function issueTokens(user) {
@@ -26,6 +50,12 @@ export function resetMockState() {
   refreshTokens.clear();
   routines = [];
   routineCounter = 0;
+  blocks = [];
+  blockCounter = 0;
+  labels = [];
+  labelCounter = 0;
+  rules = [];
+  ruleCounter = 0;
 }
 
 function requireAuth(request) {
@@ -211,5 +241,192 @@ export const handlers = [
       name: user.name,
       preferences: {},
     });
+  }),
+
+  // ── Blocks ──
+
+  http.get("/api/routines/:routineId/blocks", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const url = new URL(request.url);
+    const day = url.searchParams.get("day");
+    let result = blocks.filter((b) => b.routine_id === params.routineId);
+    if (day !== null) {
+      result = result.filter((b) => b.day_of_week === Number(day));
+    }
+    return HttpResponse.json(result);
+  }),
+
+  http.post("/api/routines/:routineId/blocks", async ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    if (body.title === undefined || body.day_of_week === undefined) {
+      return HttpResponse.json(
+        { error: "Missing required fields" },
+        { status: 422 },
+      );
+    }
+    blockCounter += 1;
+    const block = {
+      id: `block-${blockCounter}`,
+      routine_id: params.routineId,
+      day_of_week: body.day_of_week,
+      start_time: body.start_time ?? null,
+      end_time: body.end_time ?? null,
+      title: body.title,
+      type: body.type ?? "trabalho",
+      note: body.note ?? null,
+      sort_order: body.sort_order ?? 0,
+      labels: [],
+      subtasks: [],
+    };
+    blocks.push(block);
+    return HttpResponse.json(block, { status: 201 });
+  }),
+
+  http.put("/api/blocks/:id", async ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const block = blocks.find((b) => b.id === params.id);
+    if (!block) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const body = (await request.json()) || {};
+    Object.assign(block, body);
+    return HttpResponse.json(block);
+  }),
+
+  http.delete("/api/blocks/:id", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const idx = blocks.findIndex((b) => b.id === params.id);
+    if (idx === -1) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    blocks.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ── Labels ──
+
+  http.get("/api/labels", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return HttpResponse.json(labels);
+  }),
+
+  http.post("/api/labels", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    if (!body.name) {
+      return HttpResponse.json({ error: "Missing name" }, { status: 422 });
+    }
+    labelCounter += 1;
+    const label = {
+      id: `label-${labelCounter}`,
+      name: body.name,
+      color_bg: body.color_bg ?? "#1e3a5f",
+      color_text: body.color_text ?? "#93c5fd",
+      color_border: body.color_border ?? "#2563eb",
+      icon: body.icon ?? null,
+      is_default: false,
+    };
+    labels.push(label);
+    return HttpResponse.json(label, { status: 201 });
+  }),
+
+  http.put("/api/labels/:id", async ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const label = labels.find((l) => l.id === params.id);
+    if (!label) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const body = (await request.json()) || {};
+    Object.assign(label, body);
+    return HttpResponse.json(label);
+  }),
+
+  http.delete("/api/labels/:id", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const label = labels.find((l) => l.id === params.id);
+    if (!label) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    if (label.is_default) {
+      return HttpResponse.json(
+        { error: "Cannot delete default label" },
+        { status: 403 },
+      );
+    }
+    const idx = labels.findIndex((l) => l.id === params.id);
+    labels.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ── Rules ──
+
+  http.get("/api/routines/:routineId/rules", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return HttpResponse.json(
+      rules.filter((r) => r.routine_id === params.routineId),
+    );
+  }),
+
+  http.post("/api/routines/:routineId/rules", async ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    if (!body.text) {
+      return HttpResponse.json({ error: "Missing text" }, { status: 422 });
+    }
+    ruleCounter += 1;
+    const rule = {
+      id: `rule-${ruleCounter}`,
+      routine_id: params.routineId,
+      text: body.text,
+      sort_order: body.sort_order ?? 0,
+    };
+    rules.push(rule);
+    return HttpResponse.json(rule, { status: 201 });
+  }),
+
+  http.put("/api/rules/:id", async ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const rule = rules.find((r) => r.id === params.id);
+    if (!rule) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const body = (await request.json()) || {};
+    Object.assign(rule, body);
+    return HttpResponse.json(rule);
+  }),
+
+  http.delete("/api/rules/:id", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const idx = rules.findIndex((r) => r.id === params.id);
+    if (idx === -1) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    rules.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
   }),
 ];
