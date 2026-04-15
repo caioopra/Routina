@@ -19,28 +19,61 @@ if [ -n "$RUST_STAGED" ]; then
 fi
 
 # --- sqlx offline metadata drift ---
-# If any staged Rust file touches a sqlx::query!/query_as! macro, ensure the
-# committed .sqlx/ metadata still matches the code. Requires a reachable DB
-# (DATABASE_URL); if the DB is unreachable we skip with a warning rather than
-# block the commit.
-if [ -n "$RUST_STAGED" ]; then
+# When staged Rust changes touch a sqlx::query*! macro, verify the committed
+# .sqlx/ metadata still matches the live schema. This is the single most
+# important guard against runtime-only drift (migration changes that leave
+# query TEXT unchanged but the inferred column types stale). The hook will
+# auto-start the local DB via docker compose and apply migrations so the
+# check is always authoritative.
+#
+# Escape hatch: `SKIP_SQLX_CHECK=1 git commit …` to bypass (CI will still catch it).
+if [ -n "$RUST_STAGED" ] && [ "${SKIP_SQLX_CHECK:-0}" != "1" ]; then
   SQLX_STAGED=$(git diff --cached --diff-filter=ACM -U0 -- '*.rs' | grep -E '^\+.*sqlx::query' || true)
-  if [ -n "$SQLX_STAGED" ]; then
+  MIGRATIONS_STAGED=$(git diff --cached --name-only --diff-filter=ACMD -- 'backend/migrations/*.sql' || true)
+
+  if [ -n "$SQLX_STAGED" ] || [ -n "$MIGRATIONS_STAGED" ]; then
     echo "Checking sqlx offline metadata..."
-    if (cd "$REPO_ROOT/backend" && cargo sqlx prepare --workspace --check -- --all-targets 2>/dev/null) ; then
-      :
-    else
-      # Probe whether the failure is a real drift or a missing DB/tool.
-      if ! command -v cargo >/dev/null 2>&1 || ! cargo sqlx --version >/dev/null 2>&1 ; then
-        echo "  (skipped: sqlx-cli not installed; run 'cargo install sqlx-cli')"
-      elif [ -z "${DATABASE_URL:-}" ] ; then
-        echo "  (skipped: DATABASE_URL not set)"
-      else
+
+    # Source backend/.env for DATABASE_URL (if present and DATABASE_URL not already set)
+    if [ -z "${DATABASE_URL:-}" ] && [ -f "$REPO_ROOT/backend/.env" ]; then
+      # shellcheck disable=SC1091
+      set -a; . "$REPO_ROOT/backend/.env"; set +a
+    fi
+    export DATABASE_URL="${DATABASE_URL:-postgres://planner:planner@localhost:5432/planner}"
+
+    # 1. sqlx-cli available?
+    if ! cargo sqlx --version >/dev/null 2>&1 ; then
+      echo ""
+      echo "sqlx-cli is required to verify offline metadata."
+      echo "Install: cargo install sqlx-cli --locked --no-default-features --features native-tls,postgres"
+      echo "Or bypass: SKIP_SQLX_CHECK=1 git commit …"
+      exit 1
+    fi
+
+    # 2. DB reachable? If not, try `docker compose up -d postgres`.
+    if ! (cd "$REPO_ROOT/backend" && cargo sqlx migrate run >/dev/null 2>&1) ; then
+      if command -v docker >/dev/null 2>&1 ; then
+        echo "  Postgres unreachable — starting via docker compose…"
+        (cd "$REPO_ROOT" && docker compose up -d postgres >/dev/null 2>&1) || true
+        for _ in $(seq 1 30); do
+          (cd "$REPO_ROOT/backend" && cargo sqlx migrate run >/dev/null 2>&1) && break
+          sleep 1
+        done
+      fi
+      if ! (cd "$REPO_ROOT/backend" && cargo sqlx migrate run >/dev/null 2>&1) ; then
         echo ""
-        echo "sqlx offline metadata (.sqlx/) is out of date."
-        echo "Run 'make prepare' and stage the updated backend/.sqlx/ files."
+        echo "Cannot reach Postgres at $DATABASE_URL."
+        echo "Start it with 'make db-up' or bypass with SKIP_SQLX_CHECK=1 git commit …"
         exit 1
       fi
+    fi
+
+    # 3. Authoritative drift check against the migrated DB.
+    if ! (cd "$REPO_ROOT/backend" && SQLX_OFFLINE=false cargo sqlx prepare --workspace --check -- --all-targets >/dev/null 2>&1) ; then
+      echo ""
+      echo "sqlx offline metadata (backend/.sqlx/) is out of date."
+      echo "Run 'make prepare' and stage the updated backend/.sqlx/ files."
+      exit 1
     fi
   fi
 fi
