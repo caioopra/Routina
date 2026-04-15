@@ -16,6 +16,12 @@ let labelCounter = 0;
 let rules = [];
 let ruleCounter = 0;
 
+let conversations = [];
+let conversationCounter = 0;
+
+let chatMessages = [];
+let chatMessageCounter = 0;
+
 export function seedRoutines(initial) {
   routines = initial.map((r) => ({ ...r }));
   routineCounter = routines.length;
@@ -44,6 +50,16 @@ function issueTokens(user) {
   return { token, refresh_token };
 }
 
+export function seedConversations(initial) {
+  conversations = initial.map((c) => ({ ...c }));
+  conversationCounter = conversations.length;
+}
+
+export function seedChatMessages(initial) {
+  chatMessages = initial.map((m) => ({ ...m }));
+  chatMessageCounter = chatMessages.length;
+}
+
 export function resetMockState() {
   users = new Map();
   tokenCounter = 0;
@@ -56,6 +72,10 @@ export function resetMockState() {
   labelCounter = 0;
   rules = [];
   ruleCounter = 0;
+  conversations = [];
+  conversationCounter = 0;
+  chatMessages = [];
+  chatMessageCounter = 0;
 }
 
 function requireAuth(request) {
@@ -239,6 +259,7 @@ export const handlers = [
       id: user.id,
       email: user.email,
       name: user.name,
+      planner_context: user.planner_context ?? null,
       preferences: {},
     });
   }),
@@ -428,5 +449,127 @@ export const handlers = [
     }
     rules.splice(idx, 1);
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // ── Conversations ──
+
+  http.get("/api/conversations", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return HttpResponse.json([...conversations].reverse());
+  }),
+
+  http.post("/api/conversations", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    conversationCounter += 1;
+    const conv = {
+      id: `conv-${conversationCounter}`,
+      routine_id: body.routine_id ?? null,
+      title: body.title ?? null,
+      created_at: new Date().toISOString(),
+    };
+    conversations.push(conv);
+    return HttpResponse.json(conv, { status: 201 });
+  }),
+
+  http.get("/api/conversations/:id/messages", ({ request, params }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const conv = conversations.find((c) => c.id === params.id);
+    if (!conv) {
+      return HttpResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const msgs = chatMessages.filter((m) => m.conversation_id === params.id);
+    return HttpResponse.json(msgs);
+  }),
+
+  // ── Chat SSE ──
+
+  http.post("/api/chat/message", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const body = (await request.json()) || {};
+    const userText = body.message ?? "Hello";
+
+    // Persist user message
+    chatMessageCounter += 1;
+    const convId = body.conversation_id;
+    if (convId) {
+      chatMessages.push({
+        id: `msg-${chatMessageCounter}`,
+        conversation_id: convId,
+        role: "user",
+        content: userText,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    // Build a short scripted reply
+    const replyTokens = [
+      "Sure! ",
+      "I can help you ",
+      "with that routine. ",
+      "Let me know what changes ",
+      "you would like to make.",
+    ];
+
+    // Build the full SSE body as a string
+    const lines = [];
+    lines.push(
+      "event: provider\ndata: " + JSON.stringify({ name: "gemini" }) + "\n",
+    );
+    for (const t of replyTokens) {
+      lines.push("event: token\ndata: " + JSON.stringify(t) + "\n");
+    }
+    lines.push("event: done\ndata: {}\n");
+    const sseBody = lines.join("\n") + "\n";
+
+    // Persist assistant message
+    if (convId) {
+      chatMessageCounter += 1;
+      chatMessages.push({
+        id: `msg-${chatMessageCounter}`,
+        conversation_id: convId,
+        role: "assistant",
+        content: replyTokens.join(""),
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    return new HttpResponse(sseBody, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+      },
+    });
+  }),
+
+  // ── Me / planner-context ──
+
+  http.put("/api/me/planner-context", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    const user = Array.from(users.values())[0];
+    if (!user) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    user.planner_context = body.planner_context ?? "";
+    return HttpResponse.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      planner_context: user.planner_context,
+      preferences: {},
+    });
   }),
 ];

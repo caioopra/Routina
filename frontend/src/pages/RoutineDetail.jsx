@@ -7,6 +7,7 @@ import { useRuleStore } from "../stores/ruleStore";
 import BlockModal from "../components/planner/BlockModal";
 import RulesPanel from "../components/planner/RulesPanel";
 import LabelsManager from "../components/labels/LabelsManager";
+import ChatPanel from "../components/chat/ChatPanel";
 
 const COLORS = {
   trabalho: { bg: "#1e3a5f", text: "#93c5fd", border: "#2563eb" },
@@ -31,7 +32,7 @@ const DAY_NAMES = [
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 // Tabs for the side panel
-const TABS = ["Rules", "Labels"];
+const TABS = ["Rules", "Labels", "Chat"];
 
 export default function RoutineDetail() {
   const { id } = useParams();
@@ -374,26 +375,34 @@ export default function RoutineDetail() {
             ))}
           </div>
 
-          <div className="bg-surface border border-border rounded-2xl p-5">
-            {activeTab === "Rules" && (
-              <RulesPanel
-                rules={ruleSlice.rules}
-                onAdd={handleAddRule}
-                onEdit={handleEditRule}
-                onDelete={handleDeleteRule}
-                confirmingDeleteRuleId={confirmDeleteRuleId}
-                onCancelDeleteRule={() => setConfirmDeleteRuleId(null)}
-              />
-            )}
-            {activeTab === "Labels" && (
-              <LabelsManager
-                labels={labels}
-                onCreate={createLabel}
-                onEdit={updateLabel}
-                onDelete={removeLabel}
-              />
-            )}
-          </div>
+          {activeTab !== "Chat" && (
+            <div className="bg-surface border border-border rounded-2xl p-5">
+              {activeTab === "Rules" && (
+                <RulesPanel
+                  rules={ruleSlice.rules}
+                  onAdd={handleAddRule}
+                  onEdit={handleEditRule}
+                  onDelete={handleDeleteRule}
+                  confirmingDeleteRuleId={confirmDeleteRuleId}
+                  onCancelDeleteRule={() => setConfirmDeleteRuleId(null)}
+                />
+              )}
+              {activeTab === "Labels" && (
+                <LabelsManager
+                  labels={labels}
+                  onCreate={createLabel}
+                  onEdit={updateLabel}
+                  onDelete={removeLabel}
+                />
+              )}
+            </div>
+          )}
+
+          {activeTab === "Chat" && (
+            <div style={{ height: 520 }}>
+              <ChatPanel routineId={id} />
+            </div>
+          )}
 
           {ruleSlice.error && activeTab === "Rules" && (
             <div
