@@ -13,6 +13,7 @@ pub struct User {
     pub preferences: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub role: String,
 }
 
 #[derive(Debug, Deserialize)]

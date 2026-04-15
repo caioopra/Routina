@@ -16,6 +16,7 @@ pub struct CurrentUser {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    pub role: String,
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
@@ -35,6 +36,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             id: user.id,
             email: user.email,
             name: user.name,
+            role: user.role,
         })
     }
 }
@@ -76,9 +78,9 @@ fn bearer_token(headers: &axum::http::HeaderMap) -> Result<String, AppError> {
         .ok_or(AppError::Unauthorized)
 }
 
-async fn load_user(pool: &PgPool, id: Uuid) -> Result<User, AppError> {
+pub(crate) async fn load_user(pool: &PgPool, id: Uuid) -> Result<User, AppError> {
     sqlx::query_as::<_, User>(
-        "SELECT id, email, name, password_hash, preferences, created_at, updated_at \
+        "SELECT id, email, name, password_hash, preferences, created_at, updated_at, role \
          FROM users WHERE id = $1",
     )
     .bind(id)

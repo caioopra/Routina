@@ -1,5 +1,8 @@
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
 use axum::{Json, Router, extract::State, routing::get, routing::post};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -56,7 +59,7 @@ async fn register(
     let insert_result = sqlx::query_as::<_, User>(
         "INSERT INTO users (id, email, name, password_hash, preferences) \
          VALUES ($1, $2, $3, $4, '{}'::jsonb) \
-         RETURNING id, email, name, password_hash, preferences, created_at, updated_at",
+         RETURNING id, email, name, password_hash, preferences, created_at, updated_at, role",
     )
     .bind(user_id)
     .bind(&body.email)
@@ -88,12 +91,34 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<AuthResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
+    // Normalize email before rate-limit check so that "User@Example.com" and
+    // "user@example.com" share the same bucket.
+    let normalized_email = body.email.trim().to_lowercase();
+
+    // Check the per-email rate limit BEFORE any DB lookup or password
+    // comparison.  This prevents timing-oracle attacks: the 429 response is
+    // returned unconditionally regardless of whether the email exists in the
+    // database, so an attacker cannot use the 429 threshold to confirm that an
+    // email is registered.
+    if let Err(retry_after) = state.login_rate_limit.check_and_record(&normalized_email) {
+        let body = json!({
+            "error": "rate_limited",
+            "retry_after_seconds": retry_after,
+        });
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after.to_string())],
+            Json(body),
+        )
+            .into_response());
+    }
+
     let user = sqlx::query_as::<_, User>(
-        "SELECT id, email, name, password_hash, preferences, created_at, updated_at \
+        "SELECT id, email, name, password_hash, preferences, created_at, updated_at, role \
          FROM users WHERE email = $1",
     )
-    .bind(&body.email)
+    .bind(&normalized_email)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::Unauthorized)?;
@@ -102,13 +127,19 @@ async fn login(
         return Err(AppError::Unauthorized);
     }
 
+    // Successful login: clear the rate-limit bucket so the next N attempts
+    // start from zero.  This avoids locking out a legitimate user who had
+    // earlier failures (e.g., mistyped their password a few times).
+    state.login_rate_limit.clear(&normalized_email);
+
     let (token, refresh_token) = mint_token_pair(&state, user.id)?;
 
     Ok(Json(AuthResponse {
         user: UserPublic::from(user),
         token,
         refresh_token,
-    }))
+    })
+    .into_response())
 }
 
 async fn refresh(
