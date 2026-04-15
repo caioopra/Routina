@@ -97,6 +97,7 @@ impl LlmProvider for MockLlmProvider {
             .collect();
         events.push(ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         });
         Ok(Box::pin(stream::iter(events)))
     }
@@ -162,6 +163,7 @@ impl LlmProvider for ScriptedMockProvider {
         let events = if guard.is_empty() {
             vec![ProviderEvent::Done {
                 finish_reason: FinishReason::Stop,
+                usage: None,
             }]
         } else {
             guard.remove(0)
@@ -193,6 +195,19 @@ pub fn build_app_with_providers(
     providers: HashMap<String, Arc<dyn LlmProvider>>,
 ) -> Router {
     routes::create_router_with_providers(pool, test_config(), providers)
+}
+
+/// Build app with a single mock provider and a custom per-user chat rate limit.
+/// Used to test the 429 path without sending 20+ requests.
+pub fn build_app_with_rate_limit(
+    pool: PgPool,
+    mock: Arc<dyn LlmProvider>,
+    chat_rate_limit: usize,
+) -> Router {
+    let mut providers = HashMap::new();
+    let name = mock.name().to_string();
+    providers.insert(name, mock);
+    routes::create_router_with_rate_limit(pool, test_config(), providers, chat_rate_limit)
 }
 
 // ---------------------------------------------------------------------------
@@ -278,4 +293,51 @@ pub async fn register_test_user(app: &Router, email: &str, password: &str) -> Va
     .await;
     assert_eq!(status, StatusCode::OK, "register failed: {body}");
     body
+}
+
+// ---------------------------------------------------------------------------
+// SSE parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Parse raw SSE bytes into ordered `(event_name, parsed_json_data)` tuples.
+///
+/// Each SSE frame has the shape:
+///
+/// ```text
+/// event: <name>
+/// data: <json>
+/// <blank line>
+/// ```
+///
+/// Frames that have no `event:` line are skipped.  The returned `Value` is
+/// the parsed JSON value of the `data:` field; if the data is not valid JSON
+/// an `Value::Null` is returned rather than panicking.
+pub fn parse_sse_body(bytes: &[u8]) -> Vec<(String, Value)> {
+    let text = std::str::from_utf8(bytes).expect("SSE body must be UTF-8");
+    let mut frames = Vec::new();
+    let mut current_event: Option<String> = None;
+    let mut current_data: Option<String> = None;
+
+    for line in text.lines() {
+        if let Some(ev) = line.strip_prefix("event: ") {
+            current_event = Some(ev.to_string());
+        } else if let Some(data) = line.strip_prefix("data: ") {
+            current_data = Some(data.to_string());
+        } else if line.is_empty() {
+            if let (Some(ev), Some(data)) = (current_event.take(), current_data.take()) {
+                let json_value: Value = serde_json::from_str(&data).unwrap_or(Value::Null);
+                frames.push((ev, json_value));
+            }
+            current_event = None;
+            current_data = None;
+        }
+    }
+
+    // Flush a trailing frame that was not terminated by a blank line.
+    if let (Some(ev), Some(data)) = (current_event, current_data) {
+        let json_value: Value = serde_json::from_str(&data).unwrap_or(Value::Null);
+        frames.push((ev, json_value));
+    }
+
+    frames
 }

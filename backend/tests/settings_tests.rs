@@ -9,6 +9,7 @@ use common::{
     build_app_with_providers, json_oneshot, register_test_user,
 };
 use planner_backend::ai::provider::LlmProvider;
+use planner_backend::middleware::rate_limit::RateLimitState;
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -354,6 +355,7 @@ async fn resolve_provider_uses_preferred_when_available(pool: PgPool) {
         pool,
         config: common::test_config(),
         providers,
+        rate_limit: RateLimitState::default(),
     };
 
     let p = state.resolve_provider(Some("claude")).unwrap();
@@ -377,6 +379,7 @@ async fn resolve_provider_falls_back_when_preferred_unavailable(pool: PgPool) {
         pool,
         config: common::test_config(),
         providers,
+        rate_limit: RateLimitState::default(),
     };
 
     // "openai" is not available; falls back to "claude" (first alphabetically).
@@ -390,6 +393,7 @@ async fn resolve_provider_returns_none_when_no_providers(pool: PgPool) {
         pool,
         config: common::test_config(),
         providers: HashMap::new(),
+        rate_limit: RateLimitState::default(),
     };
 
     assert!(state.resolve_provider(None).is_none());

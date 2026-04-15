@@ -106,14 +106,36 @@ pub enum FinishReason {
     Other(String),
 }
 
+/// Token usage reported by the provider for one `stream_completion` call.
+///
+/// Both fields use `u32` — no provider returns negative counts and `u32` is
+/// large enough for any realistic context window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
+impl TokenUsage {
+    /// Accumulate counts from another `TokenUsage` into `self`.
+    pub fn add(&mut self, other: TokenUsage) {
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ProviderEvent {
     /// A text token delta from the model.
     Token(String),
     /// The model wants to call a tool.
     ToolCall(ToolCall),
-    /// The stream ended normally.
-    Done { finish_reason: FinishReason },
+    /// The stream ended normally.  `usage` is `Some` when the provider
+    /// included token counts in the response; `None` otherwise.
+    Done {
+        finish_reason: FinishReason,
+        usage: Option<TokenUsage>,
+    },
     /// An error occurred mid-stream.
     Error(String),
 }
@@ -188,5 +210,53 @@ mod tests {
         let json = serde_json::to_value(&schema).unwrap();
         assert_eq!(json["name"], "create_block");
         assert!(json["parameters"]["properties"]["routine_id"].is_object());
+    }
+
+    #[test]
+    fn token_usage_default_is_zero() {
+        let u = TokenUsage::default();
+        assert_eq!(u.input_tokens, 0);
+        assert_eq!(u.output_tokens, 0);
+    }
+
+    #[test]
+    fn token_usage_add_accumulates() {
+        let mut total = TokenUsage::default();
+        total.add(TokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+        });
+        total.add(TokenUsage {
+            input_tokens: 50,
+            output_tokens: 5,
+        });
+        assert_eq!(total.input_tokens, 150);
+        assert_eq!(total.output_tokens, 25);
+    }
+
+    #[test]
+    fn token_usage_add_saturates_on_overflow() {
+        let mut total = TokenUsage {
+            input_tokens: u32::MAX,
+            output_tokens: u32::MAX,
+        };
+        total.add(TokenUsage {
+            input_tokens: 1,
+            output_tokens: 1,
+        });
+        // saturating_add caps at u32::MAX, not wrapping.
+        assert_eq!(total.input_tokens, u32::MAX);
+        assert_eq!(total.output_tokens, u32::MAX);
+    }
+
+    #[test]
+    fn token_usage_serializes_to_snake_case_fields() {
+        let u = TokenUsage {
+            input_tokens: 500,
+            output_tokens: 150,
+        };
+        let json = serde_json::to_value(u).unwrap();
+        assert_eq!(json["input_tokens"], 500);
+        assert_eq!(json["output_tokens"], 150);
     }
 }

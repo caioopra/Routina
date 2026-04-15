@@ -11,8 +11,7 @@
 
 use chrono::NaiveTime;
 use serde_json::{Value, json};
-use sqlx::PgPool;
-use tracing::instrument;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::ai::provider::ToolCall;
@@ -78,7 +77,11 @@ impl ToolResult {
 ///
 /// Never panics and never returns `Err`; all failures are encoded in the
 /// returned `ToolResult`.
-#[instrument(skip(ctx), fields(tool = %call.name, user_id = %ctx.user_id))]
+///
+/// Tracing is handled by the `chat.tool_call` span opened in the SSE handler
+/// (`routes/chat.rs`), which already records `tool_name`, `tool_call_id`, and
+/// `duration_ms`.  Omitting `#[instrument]` here avoids a duplicate overlapping
+/// span per tool invocation.
 pub async fn execute_tool(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult {
     match call.name.as_str() {
         "list_blocks" => run_list_blocks(ctx, call).await,
@@ -236,6 +239,15 @@ async fn run_create_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
     let sort_order = args.sort_order.unwrap_or(0);
     let id = Uuid::now_v7();
 
+    // --- transactional write: INSERT block + attach labels + audit ---
+    let mut tx = match ctx.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(error = ?e, "tool DB error");
+            return ToolResult::err("internal_error");
+        }
+    };
+
     let block = match sqlx::query_as::<_, Block>(&format!(
         "INSERT INTO blocks (id, routine_id, day_of_week, start_time, end_time, title, type, note, sort_order) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
@@ -250,38 +262,41 @@ async fn run_create_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
     .bind(&args.block_type)
     .bind(args.note.as_deref())
     .bind(sort_order)
-    .fetch_one(ctx.pool)
+    .fetch_one(&mut *tx)
     .await
     {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = ?e, "tool DB error");
+            let _ = tx.rollback().await;
             return ToolResult::err("internal_error");
         }
     };
 
-    // --- attach labels ---
+    // --- attach labels (inside the same tx) ---
     if let Some(ref label_names) = args.label_names
-        && let Err(e) = attach_labels_by_name(ctx.pool, block.id, ctx.user_id, label_names).await
+        && let Err(e) = attach_labels_by_name_tx(&mut tx, block.id, ctx.user_id, label_names).await
     {
         tracing::error!(error = ?e, "tool DB error");
+        let _ = tx.rollback().await;
         return ToolResult::err("internal_error");
     }
 
-    // --- fetch labels for response ---
-    let labels = match fetch_labels_for_block(ctx.pool, block.id, ctx.user_id).await {
+    // --- audit log (inside the same tx) ---
+    // Build payload after using labels inserted above (fetched in same tx).
+    let labels_in_tx = match fetch_labels_for_block_tx(&mut tx, block.id, ctx.user_id).await {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(error = ?e, "tool DB error");
+            let _ = tx.rollback().await;
             return ToolResult::err("internal_error");
         }
     };
-    let response = BlockResponse::from_block(block, labels);
+    let response = BlockResponse::from_block(block, labels_in_tx);
     let payload_after = json!(response);
 
-    // --- audit log ---
-    if let Err(e) = record_action(
-        ctx.pool,
+    if let Err(e) = record_action_tx(
+        &mut tx,
         ctx.user_id,
         ctx.routine_id,
         ctx.conversation_id,
@@ -292,6 +307,12 @@ async fn run_create_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
     )
     .await
     {
+        tracing::error!(error = ?e, "tool DB error");
+        let _ = tx.rollback().await;
+        return ToolResult::err("internal_error");
+    }
+
+    if let Err(e) = tx.commit().await {
         tracing::error!(error = ?e, "tool DB error");
         return ToolResult::err("internal_error");
     }
@@ -363,7 +384,8 @@ async fn run_update_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
         return ToolResult::err("end_time must be strictly after start_time");
     }
 
-    // Capture before-snapshot for audit.
+    // Capture before-snapshot for audit (before starting the tx so we read
+    // the committed state, not something we're about to overwrite).
     let old_labels = match fetch_labels_for_block(ctx.pool, old_block.id, ctx.user_id).await {
         Ok(l) => l,
         Err(e) => {
@@ -372,6 +394,15 @@ async fn run_update_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
         }
     };
     let payload_before = json!(BlockResponse::from_block(old_block, old_labels));
+
+    // --- transactional write: UPDATE block + replace labels + audit ---
+    let mut tx = match ctx.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(error = ?e, "tool DB error");
+            return ToolResult::err("internal_error");
+        }
+    };
 
     let updated = match sqlx::query_as::<_, Block>(&format!(
         "UPDATE blocks SET \
@@ -396,36 +427,44 @@ async fn run_update_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
     .bind(args.note.as_deref())
     .bind(args.sort_order)
     .bind(args.block_id)
-    .fetch_optional(ctx.pool)
+    .fetch_optional(&mut *tx)
     .await
     {
         Ok(Some(b)) => b,
-        Ok(None) => return ToolResult::err("not_found"),
+        Ok(None) => {
+            let _ = tx.rollback().await;
+            return ToolResult::err("not_found");
+        }
         Err(e) => {
             tracing::error!(error = ?e, "tool DB error");
+            let _ = tx.rollback().await;
             return ToolResult::err("internal_error");
         }
     };
 
-    // Update labels if provided.
+    // Replace labels atomically in the same tx — DELETE then INSERT so a
+    // concurrent reader never sees a block with no labels mid-flight.
     if let Some(ref label_names) = args.label_names
-        && let Err(e) = replace_labels_by_name(ctx.pool, updated.id, ctx.user_id, label_names).await
+        && let Err(e) =
+            replace_labels_by_name_tx(&mut tx, updated.id, ctx.user_id, label_names).await
     {
         tracing::error!(error = ?e, "tool DB error");
+        let _ = tx.rollback().await;
         return ToolResult::err("internal_error");
     }
 
-    let new_labels = match fetch_labels_for_block(ctx.pool, updated.id, ctx.user_id).await {
+    let new_labels = match fetch_labels_for_block_tx(&mut tx, updated.id, ctx.user_id).await {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(error = ?e, "tool DB error");
+            let _ = tx.rollback().await;
             return ToolResult::err("internal_error");
         }
     };
     let payload_after = json!(BlockResponse::from_block(updated, new_labels));
 
-    if let Err(e) = record_action(
-        ctx.pool,
+    if let Err(e) = record_action_tx(
+        &mut tx,
         ctx.user_id,
         ctx.routine_id,
         ctx.conversation_id,
@@ -436,6 +475,12 @@ async fn run_update_block(ctx: &ToolContext<'_>, call: &ToolCall) -> ToolResult 
     )
     .await
     {
+        tracing::error!(error = ?e, "tool DB error");
+        let _ = tx.rollback().await;
+        return ToolResult::err("internal_error");
+    }
+
+    if let Err(e) = tx.commit().await {
         tracing::error!(error = ?e, "tool DB error");
         return ToolResult::err("internal_error");
     }
@@ -1204,6 +1249,9 @@ async fn fetch_labels_for_block(
 }
 
 /// Look up label IDs by name (user-scoped) and create `block_labels` rows.
+/// This pool-based version is retained for potential future callers; mutations
+/// that already hold a transaction should use `attach_labels_by_name_tx`.
+#[allow(dead_code)]
 async fn attach_labels_by_name(
     pool: &PgPool,
     block_id: Uuid,
@@ -1236,25 +1284,93 @@ async fn attach_labels_by_name(
     Ok(())
 }
 
-/// Replace the full label set on a block.
-async fn replace_labels_by_name(
-    pool: &PgPool,
+/// Transactional variant of `replace_labels_by_name`.
+///
+/// Both the DELETE and the subsequent INSERTs execute inside `tx` so that no
+/// concurrent reader can observe a block with an empty label set between the
+/// two operations.
+async fn replace_labels_by_name_tx(
+    tx: &mut Transaction<'_, Postgres>,
     block_id: Uuid,
     user_id: Uuid,
     label_names: &[String],
 ) -> Result<(), String> {
-    // Delete existing
     sqlx::query("DELETE FROM block_labels WHERE block_id = $1")
         .bind(block_id)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(|e| format!("{e}"))?;
 
-    attach_labels_by_name(pool, block_id, user_id, label_names).await
+    attach_labels_by_name_tx(tx, block_id, user_id, label_names).await
+}
+
+/// Transactional variant of `attach_labels_by_name`.
+async fn attach_labels_by_name_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    block_id: Uuid,
+    user_id: Uuid,
+    label_names: &[String],
+) -> Result<(), String> {
+    if label_names.is_empty() {
+        return Ok(());
+    }
+
+    let label_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM labels WHERE user_id = $1 AND name = ANY($2)")
+            .bind(user_id)
+            .bind(label_names)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(|e| format!("{e}"))?;
+
+    for label_id in label_ids {
+        sqlx::query(
+            "INSERT INTO block_labels (block_id, label_id) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(block_id)
+        .bind(label_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| format!("{e}"))?;
+    }
+    Ok(())
+}
+
+/// Fetch labels for a single block inside an active transaction.
+async fn fetch_labels_for_block_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    block_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<LabelResponse>, sqlx::Error> {
+    let rows: Vec<BlockLabelRow> = sqlx::query_as(
+        "SELECT bl.block_id, l.id, l.name, l.color_bg, l.color_text, l.color_border, \
+                l.icon, l.is_default \
+         FROM block_labels bl \
+         JOIN labels l ON l.id = bl.label_id \
+         WHERE bl.block_id = $1 AND l.user_id = $2",
+    )
+    .bind(block_id)
+    .bind(user_id)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| LabelResponse {
+            id: row.id,
+            name: row.name,
+            color_bg: row.color_bg,
+            color_text: row.color_text,
+            color_border: row.color_border,
+            icon: row.icon,
+            is_default: row.is_default,
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
-// Audit log helper
+// Audit log helpers
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
@@ -1281,6 +1397,37 @@ async fn record_action(
     .bind(payload_before)
     .bind(payload_after)
     .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Transactional variant of `record_action` — writes the audit row inside
+/// the caller's existing transaction so that the mutation and its audit entry
+/// are always committed or rolled back together.
+#[allow(clippy::too_many_arguments)]
+async fn record_action_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    routine_id: Uuid,
+    conversation_id: Uuid,
+    action_type: &str,
+    target_id: Uuid,
+    payload_before: Option<&Value>,
+    payload_after: Option<&Value>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO routine_actions \
+         (user_id, routine_id, conversation_id, action_type, target_id, payload_before, payload_after) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(user_id)
+    .bind(routine_id)
+    .bind(conversation_id)
+    .bind(action_type)
+    .bind(target_id)
+    .bind(payload_before)
+    .bind(payload_after)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }

@@ -6,7 +6,8 @@ use std::sync::Arc;
 use axum::http::{Method, StatusCode};
 use common::{
     MockLlmProvider, ScriptedMockProvider, build_app, build_app_with_mock,
-    build_app_with_providers, json_oneshot, raw_oneshot, register_test_user,
+    build_app_with_providers, build_app_with_rate_limit, json_oneshot, raw_oneshot,
+    register_test_user,
 };
 use planner_backend::ai::provider::{FinishReason, ProviderEvent, ToolCall};
 use serde_json::json;
@@ -419,6 +420,7 @@ async fn chat_tool_use_loop_two_rounds(pool: PgPool) {
         ProviderEvent::ToolCall(tc_clone),
         ProviderEvent::Done {
             finish_reason: FinishReason::ToolCalls,
+            usage: None,
         },
     ];
     let round2 = vec![
@@ -426,6 +428,7 @@ async fn chat_tool_use_loop_two_rounds(pool: PgPool) {
         ProviderEvent::Token(" os blocos.".to_string()),
         ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         },
     ];
 
@@ -498,12 +501,14 @@ async fn chat_tool_use_persists_correct_messages(pool: PgPool) {
         ProviderEvent::ToolCall(tc),
         ProviderEvent::Done {
             finish_reason: FinishReason::ToolCalls,
+            usage: None,
         },
     ];
     let round2 = vec![
         ProviderEvent::Token("Resposta final.".to_string()),
         ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         },
     ];
 
@@ -597,12 +602,14 @@ async fn chat_tool_use_emits_routine_updated_on_mutation(pool: PgPool) {
         ProviderEvent::ToolCall(tc),
         ProviderEvent::Done {
             finish_reason: FinishReason::ToolCalls,
+            usage: None,
         },
     ];
     let round2 = vec![
         ProviderEvent::Token("Bloco criado!".to_string()),
         ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         },
     ];
 
@@ -663,6 +670,7 @@ async fn chat_tool_use_limit_reached_emits_error(pool: PgPool) {
                 ProviderEvent::ToolCall(tc),
                 ProviderEvent::Done {
                     finish_reason: FinishReason::ToolCalls,
+                    usage: None,
                 },
             ]
         })
@@ -710,12 +718,14 @@ async fn chat_tool_use_message_history_grows_across_rounds(pool: PgPool) {
         ProviderEvent::ToolCall(tc),
         ProviderEvent::Done {
             finish_reason: FinishReason::ToolCalls,
+            usage: None,
         },
     ];
     let round2 = vec![
         ProviderEvent::Token("ok".to_string()),
         ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         },
     ];
 
@@ -763,6 +773,7 @@ async fn chat_uses_user_preferred_provider(pool: PgPool) {
         ProviderEvent::Token("alpha_response".to_string()),
         ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         },
     ]])
     .with_name("alpha")
@@ -771,6 +782,7 @@ async fn chat_uses_user_preferred_provider(pool: PgPool) {
         ProviderEvent::Token("beta_response".to_string()),
         ProviderEvent::Done {
             finish_reason: FinishReason::Stop,
+            usage: None,
         },
     ]])
     .with_name("beta")
@@ -817,5 +829,316 @@ async fn chat_uses_user_preferred_provider(pool: PgPool) {
         provider_json["name"].as_str().unwrap(),
         "beta",
         "expected beta provider to be used"
+    );
+}
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+/// 21st request from the same user is rejected with 429.
+#[sqlx::test(migrations = "./migrations")]
+async fn chat_rate_limit_429_on_excess(pool: PgPool) {
+    // Use a very small limit so the test runs in milliseconds.
+    let limit = 3usize;
+    let mock = make_mock(vec!["ok"]);
+    let app = build_app_with_rate_limit(pool.clone(), mock, limit);
+    let token = register_and_token(&app, "rl-excess@example.com").await;
+    let routine = create_routine(&app, &token).await;
+    let routine_id = routine["id"].as_str().unwrap();
+
+    // The first `limit` requests must succeed.
+    for _ in 0..limit {
+        let (status, _) = json_oneshot(
+            &app,
+            Method::POST,
+            "/api/chat/message",
+            Some(json!({ "message": "hi", "routine_id": routine_id })),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "expected OK for request within limit"
+        );
+    }
+
+    // The (limit + 1)th request must be rate-limited.
+    let (status, body) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/chat/message",
+        Some(json!({ "message": "hi", "routine_id": routine_id })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "expected 429; got {status}: {body}"
+    );
+    assert_eq!(
+        body["error"].as_str().unwrap(),
+        "rate_limited",
+        "expected error=rate_limited in body: {body}"
+    );
+    let retry = body["retry_after_seconds"].as_u64().unwrap();
+    assert!(retry >= 1, "retry_after_seconds must be >= 1");
+}
+
+/// A second user sharing the same app instance is NOT rate-limited by the first
+/// user's requests.
+#[sqlx::test(migrations = "./migrations")]
+async fn chat_rate_limit_separate_users_independent(pool: PgPool) {
+    let limit = 2usize;
+    let mock = make_mock(vec!["ok"]);
+    let app = build_app_with_rate_limit(pool.clone(), mock, limit);
+
+    let token_a = register_and_token(&app, "rl-user-a@example.com").await;
+    let token_b = register_and_token(&app, "rl-user-b@example.com").await;
+
+    let routine_a = create_routine(&app, &token_a).await;
+    let routine_b = create_routine(&app, &token_b).await;
+
+    // Exhaust user A's quota.
+    for _ in 0..limit {
+        let (status, _) = json_oneshot(
+            &app,
+            Method::POST,
+            "/api/chat/message",
+            Some(json!({
+                "message": "hi",
+                "routine_id": routine_a["id"].as_str().unwrap()
+            })),
+            Some(&token_a),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // User A is now rate-limited.
+    let (status_a, _) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/chat/message",
+        Some(json!({
+            "message": "hi",
+            "routine_id": routine_a["id"].as_str().unwrap()
+        })),
+        Some(&token_a),
+    )
+    .await;
+    assert_eq!(
+        status_a,
+        StatusCode::TOO_MANY_REQUESTS,
+        "user A should be rate-limited"
+    );
+
+    // User B can still make requests.
+    let (status_b, _) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/chat/message",
+        Some(json!({
+            "message": "hi",
+            "routine_id": routine_b["id"].as_str().unwrap()
+        })),
+        Some(&token_b),
+    )
+    .await;
+    assert_eq!(
+        status_b,
+        StatusCode::OK,
+        "user B should not be affected by user A's limit"
+    );
+}
+
+/// After the 60-second window expires, requests succeed again.
+/// Uses `tokio::time::pause` + `advance` so the test runs instantly.
+#[tokio::test]
+async fn chat_rate_limit_window_resets_after_60s() {
+    // This test does not need a DB — it tests the RateLimitState directly.
+    use planner_backend::middleware::rate_limit::RateLimitState;
+    use uuid::Uuid;
+
+    tokio::time::pause();
+
+    let state = RateLimitState::new(1);
+    let uid = Uuid::now_v7();
+
+    // First request: allowed.
+    assert!(state.check_and_record(uid).is_ok());
+    // Second request: rejected.
+    assert!(state.check_and_record(uid).is_err());
+
+    // Advance time past the 60-second window.
+    tokio::time::advance(tokio::time::Duration::from_secs(61)).await;
+
+    // After the window, the slot should be free again.
+    assert!(
+        state.check_and_record(uid).is_ok(),
+        "request should succeed after window reset"
+    );
+}
+
+// ── Token usage in done event ─────────────────────────────────────────────────
+
+/// When the mock provider emits `Some(TokenUsage)` in its `Done` event, the
+/// `done` SSE payload must include a `"usage"` object with the correct totals.
+#[sqlx::test(migrations = "./migrations")]
+async fn chat_done_event_includes_usage_when_provider_reports_it(pool: PgPool) {
+    use planner_backend::ai::provider::TokenUsage;
+
+    let round1 = vec![
+        ProviderEvent::Token("Olá!".to_string()),
+        ProviderEvent::Done {
+            finish_reason: FinishReason::Stop,
+            usage: Some(TokenUsage {
+                input_tokens: 300,
+                output_tokens: 45,
+            }),
+        },
+    ];
+
+    let scripted = ScriptedMockProvider::new(vec![round1]).into_shared();
+    let scripted_arc: Arc<dyn planner_backend::ai::provider::LlmProvider> = scripted;
+
+    let app = build_app_with_mock(pool.clone(), scripted_arc);
+    let token = register_and_token(&app, "chat-usage-present@example.com").await;
+    let routine = create_routine(&app, &token).await;
+
+    let (status, bytes) = raw_oneshot(
+        &app,
+        Method::POST,
+        "/api/chat/message",
+        Some(json!({
+            "message": "Oi",
+            "routine_id": routine["id"].as_str().unwrap()
+        })),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let events = parse_sse(&bytes);
+    let (_, done_data) = events.iter().find(|(e, _)| e == "done").unwrap();
+    let done_json: serde_json::Value = serde_json::from_str(done_data).unwrap();
+
+    assert!(
+        done_json.get("usage").is_some(),
+        "done event must have a 'usage' key when provider reported usage"
+    );
+    assert_eq!(
+        done_json["usage"]["input_tokens"].as_u64().unwrap(),
+        300,
+        "input_tokens mismatch"
+    );
+    assert_eq!(
+        done_json["usage"]["output_tokens"].as_u64().unwrap(),
+        45,
+        "output_tokens mismatch"
+    );
+}
+
+/// When the mock provider emits `None` for usage, the `done` event must omit
+/// the `"usage"` key entirely.
+#[sqlx::test(migrations = "./migrations")]
+async fn chat_done_event_omits_usage_when_provider_reports_none(pool: PgPool) {
+    let mock = make_mock(vec!["Tudo bem!"]);
+    let app = build_app_with_mock(pool.clone(), mock);
+    let token = register_and_token(&app, "chat-usage-absent@example.com").await;
+    let routine = create_routine(&app, &token).await;
+
+    let (status, bytes) = raw_oneshot(
+        &app,
+        Method::POST,
+        "/api/chat/message",
+        Some(json!({
+            "message": "Oi",
+            "routine_id": routine["id"].as_str().unwrap()
+        })),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let events = parse_sse(&bytes);
+    let (_, done_data) = events.iter().find(|(e, _)| e == "done").unwrap();
+    let done_json: serde_json::Value = serde_json::from_str(done_data).unwrap();
+
+    assert!(
+        done_json.get("usage").is_none(),
+        "done event must NOT have 'usage' when provider reported None; got: {done_json}"
+    );
+}
+
+/// Token usage from multiple tool-use rounds is summed in the `done` event.
+#[sqlx::test(migrations = "./migrations")]
+async fn chat_done_event_accumulates_usage_across_rounds(pool: PgPool) {
+    use planner_backend::ai::provider::TokenUsage;
+
+    let tc = make_tool_call("list_blocks", json!({}));
+
+    // Round 1: tool call with usage.
+    let round1 = vec![
+        ProviderEvent::ToolCall(tc),
+        ProviderEvent::Done {
+            finish_reason: FinishReason::ToolCalls,
+            usage: Some(TokenUsage {
+                input_tokens: 200,
+                output_tokens: 10,
+            }),
+        },
+    ];
+    // Round 2: text response with usage.
+    let round2 = vec![
+        ProviderEvent::Token("Aqui estão os blocos.".to_string()),
+        ProviderEvent::Done {
+            finish_reason: FinishReason::Stop,
+            usage: Some(TokenUsage {
+                input_tokens: 250,
+                output_tokens: 30,
+            }),
+        },
+    ];
+
+    let scripted = ScriptedMockProvider::new(vec![round1, round2]).into_shared();
+    let scripted_arc: Arc<dyn planner_backend::ai::provider::LlmProvider> = scripted;
+
+    let app = build_app_with_mock(pool.clone(), scripted_arc);
+    let token = register_and_token(&app, "chat-usage-multi-round@example.com").await;
+    let routine = create_routine(&app, &token).await;
+
+    let (status, bytes) = raw_oneshot(
+        &app,
+        Method::POST,
+        "/api/chat/message",
+        Some(json!({
+            "message": "Liste meus blocos.",
+            "routine_id": routine["id"].as_str().unwrap()
+        })),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let events = parse_sse(&bytes);
+    let (_, done_data) = events.iter().find(|(e, _)| e == "done").unwrap();
+    let done_json: serde_json::Value = serde_json::from_str(done_data).unwrap();
+
+    assert!(
+        done_json.get("usage").is_some(),
+        "done event must have usage when all rounds report it"
+    );
+    // Totals: input 200 + 250 = 450; output 10 + 30 = 40.
+    assert_eq!(
+        done_json["usage"]["input_tokens"].as_u64().unwrap(),
+        450,
+        "input_tokens should be summed across rounds"
+    );
+    assert_eq!(
+        done_json["usage"]["output_tokens"].as_u64().unwrap(),
+        40,
+        "output_tokens should be summed across rounds"
     );
 }

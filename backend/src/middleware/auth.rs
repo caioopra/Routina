@@ -1,6 +1,8 @@
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRequestParts, Request, State};
 use axum::http::header;
 use axum::http::request::Parts;
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -35,6 +37,32 @@ impl FromRequestParts<AppState> for CurrentUser {
             name: user.name,
         })
     }
+}
+
+/// Router-level middleware that enforces JWT authentication.
+///
+/// Applied to the protected sub-router in `routes/mod.rs`.  Any request that
+/// reaches this middleware without a valid Access token receives 401 immediately,
+/// before any handler is invoked.  This provides defence-in-depth: even a handler
+/// that accidentally omits the `CurrentUser` extractor cannot be reached without
+/// a valid token.
+pub async fn auth_middleware(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let token = match bearer_token(request.headers()) {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+    let claims = match decode_token(&token, &state.config.jwt_secret) {
+        Ok(c) => c,
+        Err(_) => return AppError::Unauthorized.into_response(),
+    };
+    if claims.typ != TokenKind::Access {
+        return AppError::Unauthorized.into_response();
+    }
+    next.run(request).await
 }
 
 fn bearer_token(headers: &axum::http::HeaderMap) -> Result<String, AppError> {

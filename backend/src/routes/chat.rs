@@ -14,6 +14,7 @@
 //! preferable to losing context entirely.
 
 use std::convert::Infallible;
+use std::time::Instant;
 
 use axum::{
     Json, Router,
@@ -25,10 +26,13 @@ use axum::{
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
+use tracing::{Level, Span, field};
 use uuid::Uuid;
 
 use crate::ai::prompts::{RoutineContext, UserContext, planner_system_prompt};
-use crate::ai::provider::{FinishReason, Message as LlmMessage, ProviderEvent, ToolCall};
+use crate::ai::provider::{
+    FinishReason, Message as LlmMessage, ProviderEvent, TokenUsage, ToolCall,
+};
 use crate::ai::tools::executor::{ToolContext, execute_tool};
 use crate::ai::tools::schemas::all_tool_schemas;
 use crate::middleware::CurrentUser;
@@ -63,6 +67,20 @@ async fn send_message(
     user: CurrentUser,
     Json(body): Json<SendMessageRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    // ── Span: chat.turn — covers the entire request ───────────────────────
+    // `provider` is recorded once we know it; `conversation_id` is filled in
+    // after conversation resolution.  Both start as Empty so the span is still
+    // opened before we have the values.
+    let turn_span = tracing::span!(
+        Level::INFO,
+        "chat.turn",
+        user_id = %user.id,
+        conversation_id = field::Empty,
+        routine_id = field::Empty,
+        provider = field::Empty,
+    );
+    let _turn_guard = turn_span.enter();
+
     // ── Resolve the LLM provider for this user ────────────────────────────
     // Read from users.preferences.llm_provider; fall back to first available.
     let pref_row = sqlx::query!("SELECT preferences FROM users WHERE id = $1", user.id,)
@@ -128,6 +146,10 @@ async fn send_message(
     let routine_id = conversation
         .routine_id
         .ok_or_else(|| AppError::Internal(format!("conversation {conv_id} has no routine_id")))?;
+
+    // Record resolved IDs and provider into the turn span now that we have them.
+    Span::current().record("conversation_id", conv_id.to_string().as_str());
+    Span::current().record("routine_id", routine_id.to_string().as_str());
 
     // ── Persist the user message ───────────────────────────────────────────
     sqlx::query(
@@ -220,6 +242,9 @@ async fn send_message(
 
     // ── Start the tool-use loop ────────────────────────────────────────────
     let provider_name = provider.name().to_owned();
+    // Record provider name into the enclosing turn span.
+    Span::current().record("provider", provider_name.as_str());
+
     let tools = all_tool_schemas();
     let pool = state.pool.clone();
 
@@ -234,8 +259,20 @@ async fn send_message(
         let mut had_error = false;
         // The client-visible error message — must never contain raw provider or DB details.
         let mut error_payload = String::new();
+        // Accumulated token usage across all rounds.
+        let mut total_usage: Option<TokenUsage> = None;
 
         'rounds: for round in 0..MAX_TOOL_ROUNDS {
+            // ── Span: chat.round — covers one provider call ───────────────
+            // finish_reason is recorded at round end; use Empty initially.
+            let round_span = tracing::span!(
+                Level::DEBUG,
+                "chat.round",
+                round = round,
+                finish_reason = field::Empty,
+            );
+            let _round_guard = round_span.enter();
+
             // Start a new stream for this round.
             let stream_result = provider.stream_completion(&llm_messages, &tools).await;
             let mut llm_stream = match stream_result {
@@ -264,8 +301,13 @@ async fn send_message(
                         // Accumulate; emit after Done so we know the full set.
                         accumulated_tool_calls.push(tc);
                     }
-                    ProviderEvent::Done { finish_reason: fr } => {
+                    ProviderEvent::Done { finish_reason: fr, usage } => {
                         finish_reason = fr;
+                        // Accumulate token usage from this round.
+                        if let Some(u) = usage {
+                            let acc = total_usage.get_or_insert(TokenUsage::default());
+                            acc.add(u);
+                        }
                         break;
                     }
                     ProviderEvent::Error(msg) => {
@@ -276,6 +318,9 @@ async fn send_message(
                     }
                 }
             }
+
+            // Record finish_reason into the round span.
+            Span::current().record("finish_reason", format!("{finish_reason:?}").as_str());
 
             // Persist the assistant message for this round.
             let asst_msg_id = Uuid::now_v7();
@@ -341,8 +386,21 @@ async fn send_message(
                     .to_string(),
                 ));
 
-                // Execute.
+                // ── Span: chat.tool_call — wraps execute_tool ─────────────
+                let tool_start = Instant::now();
+                let tool_span = tracing::span!(
+                    Level::INFO,
+                    "chat.tool_call",
+                    tool_name = %tc.name,
+                    tool_call_id = %tc.id,
+                    duration_ms = field::Empty,
+                );
+                let _tool_guard = tool_span.enter();
+
                 let result = execute_tool(&ctx, tc).await;
+
+                let duration_ms = tool_start.elapsed().as_millis();
+                Span::current().record("duration_ms", duration_ms);
 
                 // Persist tool-result message.
                 let tool_msg_id = Uuid::now_v7();
@@ -361,7 +419,11 @@ async fn send_message(
                 .await;
 
                 if let Err(e) = persist_tool {
-                    tracing::error!("Failed to persist tool message for call {}: {e}", tc.id);
+                    tracing::error!(
+                        tool_call_id = %tc.id,
+                        error = ?e,
+                        "Failed to persist tool message",
+                    );
                 }
 
                 // Emit tool_result event.
@@ -405,14 +467,21 @@ async fn send_message(
             // error_payload is already a JSON string (provider_error or tool_loop_limit_reached).
             yield Ok(sse_line("error", &error_payload));
         } else {
-            yield Ok(sse_line(
-                "done",
-                &json!({
+            let done_payload = match total_usage {
+                Some(u) => json!({
                     "conversation_id": conv_id,
-                    "message_id": last_asst_msg_id
-                })
-                .to_string(),
-            ));
+                    "message_id": last_asst_msg_id,
+                    "usage": {
+                        "input_tokens": u.input_tokens,
+                        "output_tokens": u.output_tokens,
+                    }
+                }),
+                None => json!({
+                    "conversation_id": conv_id,
+                    "message_id": last_asst_msg_id,
+                }),
+            };
+            yield Ok(sse_line("done", &done_payload.to_string()));
         }
     };
 

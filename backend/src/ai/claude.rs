@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 use crate::ai::error::ProviderError;
 use crate::ai::provider::{
-    FinishReason, LlmProvider, Message, ProviderEvent, Role, ToolCall, ToolSchema,
+    FinishReason, LlmProvider, Message, ProviderEvent, Role, TokenUsage, ToolCall, ToolSchema,
 };
 
 // ---------------------------------------------------------------------------
@@ -54,13 +54,20 @@ const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 // Anthropic SSE wire types
 // ---------------------------------------------------------------------------
 
+/// Usage counts reported inside `message_start` and `message_delta` events.
+#[derive(Debug, Deserialize, Default)]
+struct AnthropicUsage {
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+}
+
 /// Top-level SSE event wrapper: `event: <type>\ndata: <json>`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(dead_code)]
 enum AnthropicEvent {
     MessageStart {
-        message: Value,
+        message: MessageStartPayload,
     },
     ContentBlockStart {
         index: usize,
@@ -76,7 +83,7 @@ enum AnthropicEvent {
     MessageDelta {
         delta: MessageDeltaPayload,
         #[serde(default)]
-        usage: Value,
+        usage: AnthropicUsage,
     },
     MessageStop,
     #[serde(rename = "error")]
@@ -86,6 +93,13 @@ enum AnthropicEvent {
     /// Catch-all for unknown event types (ping, etc.)
     #[serde(other)]
     Unknown,
+}
+
+/// Payload for `message_start` — carries initial input token count.
+#[derive(Debug, Deserialize)]
+struct MessageStartPayload {
+    #[serde(default)]
+    usage: AnthropicUsage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +253,10 @@ struct StreamState {
     pending_tool_blocks: HashMap<usize, PendingToolBlock>,
     /// The accumulated `stop_reason` from `message_delta`.
     stop_reason: Option<String>,
+    /// Accumulated token usage across `message_start` and `message_delta`.
+    usage: TokenUsage,
+    /// Set to `true` once at least one usage field was seen.
+    has_usage: bool,
 }
 
 /// Parse a single SSE payload (the `data:` part, after stripping the prefix).
@@ -258,6 +276,15 @@ fn parse_sse_data(data: &str, state: &mut StreamState) -> (Vec<ProviderEvent>, b
     };
 
     match event {
+        AnthropicEvent::MessageStart { message } => {
+            // `message_start` carries the initial input token count.
+            if let Some(n) = message.usage.input_tokens {
+                state.usage.input_tokens = state.usage.input_tokens.saturating_add(n);
+                state.has_usage = true;
+            }
+            (vec![], false)
+        }
+
         AnthropicEvent::ContentBlockStart {
             index,
             content_block,
@@ -310,8 +337,13 @@ fn parse_sse_data(data: &str, state: &mut StreamState) -> (Vec<ProviderEvent>, b
             }
         }
 
-        AnthropicEvent::MessageDelta { delta, .. } => {
+        AnthropicEvent::MessageDelta { delta, usage } => {
             state.stop_reason = delta.stop_reason;
+            // `message_delta` carries the output token count for this response.
+            if let Some(n) = usage.output_tokens {
+                state.usage.output_tokens = state.usage.output_tokens.saturating_add(n);
+                state.has_usage = true;
+            }
             (vec![], false)
         }
 
@@ -323,7 +355,18 @@ fn parse_sse_data(data: &str, state: &mut StreamState) -> (Vec<ProviderEvent>, b
                 Some(other) => FinishReason::Other(other.to_string()),
                 None => FinishReason::Stop,
             };
-            (vec![ProviderEvent::Done { finish_reason }], true)
+            let usage = if state.has_usage {
+                Some(state.usage)
+            } else {
+                None
+            };
+            (
+                vec![ProviderEvent::Done {
+                    finish_reason,
+                    usage,
+                }],
+                true,
+            )
         }
 
         AnthropicEvent::ApiError { error } => (
@@ -334,8 +377,8 @@ fn parse_sse_data(data: &str, state: &mut StreamState) -> (Vec<ProviderEvent>, b
             true,
         ),
 
-        // message_start, ping, and other unknown events are silently ignored.
-        AnthropicEvent::MessageStart { .. } | AnthropicEvent::Unknown => (vec![], false),
+        // ping, and other unknown events are silently ignored.
+        AnthropicEvent::Unknown => (vec![], false),
     }
 }
 
@@ -527,7 +570,8 @@ mod tests {
         assert!(matches!(
             done.unwrap(),
             ProviderEvent::Done {
-                finish_reason: FinishReason::Stop
+                finish_reason: FinishReason::Stop,
+                ..
             }
         ));
     }
@@ -595,7 +639,8 @@ mod tests {
         assert!(matches!(
             done.unwrap(),
             ProviderEvent::Done {
-                finish_reason: FinishReason::ToolCalls
+                finish_reason: FinishReason::ToolCalls,
+                ..
             }
         ));
     }
@@ -658,7 +703,8 @@ mod tests {
         assert!(matches!(
             done,
             ProviderEvent::Done {
-                finish_reason: FinishReason::Length
+                finish_reason: FinishReason::Length,
+                ..
             }
         ));
     }
@@ -681,7 +727,8 @@ mod tests {
         assert!(matches!(
             done,
             ProviderEvent::Done {
-                finish_reason: FinishReason::Other(s)
+                finish_reason: FinishReason::Other(s),
+                ..
             } if s == "safety"
         ));
     }
@@ -852,6 +899,61 @@ mod tests {
             .expect("expected ToolCall even with broken JSON");
         if let ProviderEvent::ToolCall(tc) = tc_event {
             assert!(tc.args.is_object(), "args should fall back to empty object");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // TokenUsage extraction from message_start + message_delta
+    // -----------------------------------------------------------------------
+
+    /// Full SSE sequence that carries usage in both message_start (input) and
+    /// message_delta (output).  Matches the real Claude wire format.
+    const TEXT_WITH_USAGE_SSE: &[&str] = &[
+        r#"data: {"type":"message_start","message":{"id":"msg_u1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":250,"output_tokens":1}}}"#,
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Oi!"}}"#,
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":60}}"#,
+        r#"data: {"type":"message_stop"}"#,
+    ];
+
+    #[test]
+    fn usage_extracted_from_message_start_and_message_delta() {
+        let events = run_sse_sequence(TEXT_WITH_USAGE_SSE);
+        let done = events
+            .iter()
+            .find(|e| matches!(e, ProviderEvent::Done { .. }))
+            .expect("expected Done event");
+        if let ProviderEvent::Done { usage, .. } = done {
+            let u = usage.expect("expected Some(TokenUsage)");
+            assert_eq!(u.input_tokens, 250, "input tokens from message_start");
+            assert_eq!(u.output_tokens, 60, "output tokens from message_delta");
+        }
+    }
+
+    #[test]
+    fn usage_none_when_no_token_counts_in_stream() {
+        // TEXT_ONLY_SSE has usage fields but they are "output_tokens":1 in
+        // message_start and "output_tokens":5 in message_delta, so has_usage is
+        // still set.  Use a sequence with no numeric counts at all.
+        let lines = &[
+            r#"data: {"type":"message_start","message":{"id":"msg_x","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5","stop_reason":null,"stop_sequence":null,"usage":{}}}"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{}}"#,
+            r#"data: {"type":"message_stop"}"#,
+        ];
+        let events = run_sse_sequence(lines);
+        let done = events
+            .iter()
+            .find(|e| matches!(e, ProviderEvent::Done { .. }))
+            .expect("expected Done event");
+        if let ProviderEvent::Done { usage, .. } = done {
+            assert!(
+                usage.is_none(),
+                "expected None when no token counts present"
+            );
         }
     }
 }

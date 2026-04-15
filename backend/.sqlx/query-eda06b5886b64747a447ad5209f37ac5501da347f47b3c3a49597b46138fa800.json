@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tool_calls FROM messages WHERE conversation_id = $1 AND role = 'assistant' AND tool_calls IS NOT NULL ORDER BY created_at ASC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tool_calls",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "eda06b5886b64747a447ad5209f37ac5501da347f47b3c3a49597b46138fa800"
+}

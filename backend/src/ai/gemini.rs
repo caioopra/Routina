@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::ai::error::ProviderError;
 use crate::ai::provider::{
-    FinishReason, LlmProvider, Message, ProviderEvent, Role, ToolCall, ToolSchema,
+    FinishReason, LlmProvider, Message, ProviderEvent, Role, TokenUsage, ToolCall, ToolSchema,
 };
 
 // ---------------------------------------------------------------------------
@@ -25,10 +25,16 @@ use crate::ai::provider::{
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GeminiUsageMetadata {
+    prompt_token_count: Option<u32>,
+    candidates_token_count: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GeminiResponse {
     candidates: Option<Vec<GeminiCandidate>>,
-    #[allow(dead_code)]
-    usage_metadata: Option<Value>,
+    usage_metadata: Option<GeminiUsageMetadata>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -163,6 +169,16 @@ fn parse_sse_chunk(json_text: &str) -> Vec<ProviderEvent> {
         }
     };
 
+    // Extract token usage when present (usually only in the last chunk).
+    let usage = response.usage_metadata.as_ref().and_then(|u| {
+        let input = u.prompt_token_count?;
+        let output = u.candidates_token_count?;
+        Some(TokenUsage {
+            input_tokens: input,
+            output_tokens: output,
+        })
+    });
+
     let mut events = Vec::new();
 
     let candidates = response.candidates.unwrap_or_default();
@@ -195,6 +211,7 @@ fn parse_sse_chunk(json_text: &str) -> Vec<ProviderEvent> {
             };
             events.push(ProviderEvent::Done {
                 finish_reason: finish,
+                usage,
             });
         }
     }
@@ -390,7 +407,8 @@ mod tests {
         assert!(matches!(
             &events[0],
             ProviderEvent::Done {
-                finish_reason: FinishReason::Stop
+                finish_reason: FinishReason::Stop,
+                ..
             }
         ));
     }
@@ -418,7 +436,8 @@ mod tests {
         assert!(matches!(
             done,
             ProviderEvent::Done {
-                finish_reason: FinishReason::ToolCalls
+                finish_reason: FinishReason::ToolCalls,
+                ..
             }
         ));
     }
@@ -448,7 +467,7 @@ mod tests {
         let chunk = r#"{"candidates": [{"content": {"parts": [], "role": "model"}, "finishReason": "SAFETY"}]}"#;
         let events = parse_sse_chunk(chunk);
         assert!(
-            matches!(&events[0], ProviderEvent::Done { finish_reason: FinishReason::Other(s) } if s == "SAFETY")
+            matches!(&events[0], ProviderEvent::Done { finish_reason: FinishReason::Other(s), .. } if s == "SAFETY")
         );
     }
 
@@ -510,5 +529,61 @@ mod tests {
         assert!(url.contains("gemini-2.0-flash"));
         assert!(url.contains("my-key"));
         assert!(url.contains("alt=sse"));
+    }
+
+    // ---- TokenUsage extraction -----------------------------------------------
+
+    /// Gemini chunk that carries `usageMetadata` alongside a STOP finish reason.
+    const STOP_WITH_USAGE_CHUNK: &str = r#"{
+        "candidates": [{
+            "content": { "parts": [], "role": "model" },
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 120,
+            "candidatesTokenCount": 45
+        }
+    }"#;
+
+    #[test]
+    fn parse_usage_metadata_into_done_event() {
+        let events = parse_sse_chunk(STOP_WITH_USAGE_CHUNK);
+        let done = events
+            .iter()
+            .find(|e| matches!(e, ProviderEvent::Done { .. }))
+            .expect("expected Done event");
+        if let ProviderEvent::Done { usage, .. } = done {
+            let u = usage.expect("expected Some(TokenUsage)");
+            assert_eq!(u.input_tokens, 120);
+            assert_eq!(u.output_tokens, 45);
+        }
+    }
+
+    #[test]
+    fn parse_chunk_without_usage_yields_none() {
+        // STOP_CHUNK has no usageMetadata.
+        let events = parse_sse_chunk(STOP_CHUNK);
+        let done = events
+            .iter()
+            .find(|e| matches!(e, ProviderEvent::Done { .. }))
+            .expect("expected Done event");
+        if let ProviderEvent::Done { usage, .. } = done {
+            assert!(usage.is_none(), "expected None when usageMetadata absent");
+        }
+    }
+
+    #[test]
+    fn token_usage_add_accumulates() {
+        let mut total = TokenUsage::default();
+        total.add(TokenUsage {
+            input_tokens: 100,
+            output_tokens: 30,
+        });
+        total.add(TokenUsage {
+            input_tokens: 50,
+            output_tokens: 20,
+        });
+        assert_eq!(total.input_tokens, 150);
+        assert_eq!(total.output_tokens, 50);
     }
 }
