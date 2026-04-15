@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import data from "./rotina.json";
 
 /* ── palette ── */
@@ -699,51 +700,78 @@ export default function Planner() {
           </p>
         </div>
 
-        {/* Toggle */}
+        {/* Routines link + Toggle */}
         <div
           style={{
             display: "flex",
-            gap: 0,
+            alignItems: "center",
+            gap: 12,
             marginTop: isDesktop ? 0 : 24,
-            background: S.surface,
-            borderRadius: 12,
-            padding: 4,
-            border: `1px solid ${S.border}`,
-            flexShrink: 0,
-            boxShadow: `0 2px 12px rgba(0,0,0,0.2)`,
+            flexWrap: "wrap",
           }}
         >
-          {[
-            { key: false, label: "Agenda" },
-            { key: true, label: "Resumo & Regras" },
-          ].map(({ key, label }) => {
-            const active = showSummary === key;
-            return (
-              <button
-                key={label}
-                className={active ? "" : "p-toggle-btn"}
-                onClick={() => setShowSummary(key)}
-                style={{
-                  padding: "10px 24px",
-                  fontSize: 13,
-                  fontWeight: active ? 700 : 500,
-                  fontFamily: FONT_BODY,
-                  border: "none",
-                  borderRadius: 9,
-                  cursor: "pointer",
-                  background: active
-                    ? `linear-gradient(135deg, ${S.accent}22, ${S.overlay})`
-                    : "transparent",
-                  color: active ? "#c4b5fd" : S.textMuted,
-                  boxShadow: active
-                    ? `0 0 12px ${S.accentGlow}, inset 0 0 0 1px ${S.accent}33`
-                    : "none",
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
+          <Link
+            to="/routines"
+            className="p-day-pill"
+            style={{
+              padding: "10px 16px",
+              fontSize: 13,
+              fontWeight: 600,
+              fontFamily: FONT_BODY,
+              border: `1px solid ${S.border}`,
+              borderRadius: 12,
+              background: S.surface,
+              color: S.textSecondary,
+              textDecoration: "none",
+              boxShadow: `0 2px 12px rgba(0,0,0,0.2)`,
+            }}
+          >
+            Minhas rotinas →
+          </Link>
+          <div
+            style={{
+              display: "flex",
+              gap: 0,
+              background: S.surface,
+              borderRadius: 12,
+              padding: 4,
+              border: `1px solid ${S.border}`,
+              flexShrink: 0,
+              boxShadow: `0 2px 12px rgba(0,0,0,0.2)`,
+            }}
+          >
+            {[
+              { key: false, label: "Agenda" },
+              { key: true, label: "Resumo & Regras" },
+            ].map(({ key, label }) => {
+              const active = showSummary === key;
+              return (
+                <button
+                  key={label}
+                  className={active ? "" : "p-toggle-btn"}
+                  onClick={() => setShowSummary(key)}
+                  style={{
+                    padding: "10px 24px",
+                    fontSize: 13,
+                    fontWeight: active ? 700 : 500,
+                    fontFamily: FONT_BODY,
+                    border: "none",
+                    borderRadius: 9,
+                    cursor: "pointer",
+                    background: active
+                      ? `linear-gradient(135deg, ${S.accent}22, ${S.overlay})`
+                      : "transparent",
+                    color: active ? "#c4b5fd" : S.textMuted,
+                    boxShadow: active
+                      ? `0 0 12px ${S.accentGlow}, inset 0 0 0 1px ${S.accent}33`
+                      : "none",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
