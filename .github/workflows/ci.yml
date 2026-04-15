@@ -51,6 +51,13 @@ jobs:
         run: |
           PGPASSWORD=planner psql -h localhost -U planner -d planner -c "CREATE DATABASE planner_test;"
 
+      - name: Apply migrations
+        run: |
+          for f in backend/migrations/*.sql; do
+            echo "Applying $f"
+            PGPASSWORD=planner psql -h localhost -U planner -d planner -v ON_ERROR_STOP=1 -f "$f"
+          done
+
       - name: Check formatting
         working-directory: backend
         run: cargo fmt -- --check
