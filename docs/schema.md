@@ -12,6 +12,7 @@ User accounts and preferences.
 | password_hash | TEXT | argon2 hash |
 | preferences | JSONB | `{ timezone, language, theme, llm_provider }` |
 | planner_context | TEXT | Nullable; free-form "about me" text injected into every LLM system prompt |
+| role | TEXT NOT NULL DEFAULT 'user' | CHECK: `'user'` \| `'admin'`; see Admin model below |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -145,7 +146,12 @@ Every turn in a conversation, including tool-call turns.
 | tool_calls | JSONB | Assistant rows only; list of `{ id, name, args }` objects |
 | tool_call_id | TEXT | `role='tool'` rows; references the assistant's `tool_calls[].id` |
 | provider | TEXT | Nullable; `'gemini'` or `'claude'` on assistant rows |
+| input_tokens | INT | Nullable; prompt tokens billed on this LLM turn |
+| output_tokens | INT | Nullable; completion tokens billed on this LLM turn |
+| model | TEXT | Nullable; exact model string returned by provider (e.g. `'gemini-2.0-flash'`) |
 | created_at | TIMESTAMPTZ | |
+
+Only assistant rows produced by an LLM call carry non-NULL token values. User, tool, and system rows — and all rows created before migration 005 — remain NULL (no backfill). Token data feeds the Slice C rollup queries and the Phase 3 admin metrics endpoint.
 
 **Indexes:** `(conversation_id, created_at ASC)` — history fetch in chronological order
 
@@ -175,6 +181,15 @@ On every conversation turn the backend builds the system prompt from three sourc
 3. **Active routine state** — the current routine's blocks, labels, and rules serialised to a compact text representation, when a `routine_id` is set on the conversation.
 
 `planner_context` is intentionally separate from `users.preferences` (which stores provider toggle and UI preferences) because it is narrative text consumed by the LLM, not a machine-readable config value.
+
+### Admin model
+
+Phase 3 introduces a single `role` column on `users` (CHECK-constrained to `'user'` or `'admin'`) instead of a separate roles table. This is intentional: the application has only two privilege levels, and a JOIN-free CHECK constraint is simpler to query and enforce.
+
+- **Default:** every new user gets `role = 'user'` automatically; no application code needs to set it.
+- **Promotion:** an existing admin promotes another user by issuing `UPDATE users SET role = 'admin' WHERE id = $1`. A dedicated API endpoint (Phase 3 Slice B) wraps this with authorization checks.
+- **Partial index:** `users_role_idx` (added in migration 005) covers only the `role = 'admin'` rows. Because virtually all users are regular users the index stays tiny while making the admin-list query (`SELECT * FROM users WHERE role = 'admin'`) an index-only scan.
+- **Audit log:** a full action audit log (migration 006, Phase 3 Slice B) will record admin operations separately from the per-conversation `routine_actions` log.
 
 ### `rules`
 Monthly rules/guidelines for a routine.
