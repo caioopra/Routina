@@ -34,6 +34,7 @@ pub struct MeResponse {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    pub planner_context: Option<String>,
     pub preferences: serde_json::Value,
 }
 
@@ -131,18 +132,20 @@ async fn me(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> Result<Json<MeResponse>, AppError> {
-    let preferences: serde_json::Value =
-        sqlx::query_scalar("SELECT preferences FROM users WHERE id = $1")
-            .bind(user.id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::Unauthorized)?;
+    let row = sqlx::query!(
+        "SELECT preferences, planner_context FROM users WHERE id = $1",
+        user.id,
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
 
     Ok(Json(MeResponse {
         id: user.id,
         email: user.email,
         name: user.name,
-        preferences,
+        planner_context: row.planner_context,
+        preferences: row.preferences,
     }))
 }
 

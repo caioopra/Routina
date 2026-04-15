@@ -1,18 +1,32 @@
+use std::sync::Arc;
+
 use axum::Router;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::ai::provider::LlmProvider;
 use crate::config::Config;
 use crate::middleware::error::AppError;
 
 pub mod auth;
 pub mod blocks;
+pub mod chat;
+pub mod conversations;
 pub mod health;
 pub mod labels;
+pub mod me;
 pub mod routines;
 pub mod rules;
 
 pub fn create_router(pool: PgPool, config: Config) -> Router {
+    create_router_with_provider(pool, config, None)
+}
+
+pub fn create_router_with_provider(
+    pool: PgPool,
+    config: Config,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
+) -> Router {
     let api = Router::new()
         .nest("/health", health::router())
         .nest("/auth", auth::router())
@@ -24,17 +38,42 @@ pub fn create_router(pool: PgPool, config: Config) -> Router {
         .nest("/routines/{routine_id}/rules", rules::nested_router())
         .nest("/rules", rules::flat_router())
         // Labels are top-level, user-scoped.
-        .nest("/labels", labels::router());
+        .nest("/labels", labels::router())
+        // Conversations
+        .nest("/conversations", conversations::router())
+        // Chat SSE
+        .nest("/chat", chat::router())
+        // Me (planner context)
+        .nest("/me", me::router());
 
-    Router::new()
-        .nest("/api", api)
-        .with_state(AppState { pool, config })
+    Router::new().nest("/api", api).with_state(AppState {
+        pool,
+        config,
+        llm_provider,
+    })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub config: Config,
+    /// Shared LLM provider instance.  `None` when `GEMINI_API_KEY` is absent at
+    /// startup — the chat handler returns 503 in that case rather than panicking.
+    pub llm_provider: Option<Arc<dyn LlmProvider>>,
+}
+
+// Manual Debug impl because `dyn LlmProvider` doesn't implement Debug.
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("pool", &self.pool)
+            .field("config", &self.config)
+            .field(
+                "llm_provider",
+                &self.llm_provider.as_ref().map(|p| p.name()),
+            )
+            .finish()
+    }
 }
 
 /// Verifies that the routine exists and belongs to the given user.
