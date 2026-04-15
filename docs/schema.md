@@ -11,6 +11,7 @@ User accounts and preferences.
 | name | TEXT | Display name |
 | password_hash | TEXT | argon2 hash |
 | preferences | JSONB | `{ timezone, language, theme, llm_provider }` |
+| planner_context | TEXT | Nullable; free-form "about me" text injected into every LLM system prompt |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
@@ -118,31 +119,62 @@ Calendar events with reminders.
 **Indexes:** `(user_id, starts_at)`
 
 ### `conversations`
-AI chat conversations.
+AI chat sessions between a user and the LLM. One row per session.
+`routine_id` is optional — when set the conversation is scoped to a specific routine (e.g. editing "Abril 2026"). `title` starts NULL and can be back-filled by the LLM after a few turns.
+
 | Column | Type | Notes |
 |--------|------|-------|
-| id | UUID PK | |
-| user_id | UUID FK→users | |
-| purpose | TEXT | 'onboarding', 'routine_edit', 'general' |
-| routine_id | UUID FK→routines | Nullable |
+| id | UUID PK | `gen_random_uuid()` |
+| user_id | UUID FK→users CASCADE | Owner |
+| title | TEXT | Nullable; LLM-generated summary |
+| routine_id | UUID FK→routines SET NULL | Optional scope |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | |
 
-**Indexes:** `(user_id, created_at DESC)`
+**Indexes:** `(user_id, created_at DESC)` — list endpoint, `(routine_id)` — filter by routine
 
 ### `messages`
-Individual messages in conversations.
+Every turn in a conversation, including tool-call turns.
+
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID PK | |
 | conversation_id | UUID FK→conversations CASCADE | |
-| role | TEXT | 'user', 'assistant', 'system', 'tool_use', 'tool_result' |
-| content | TEXT | |
-| tool_calls | JSONB | If assistant used tools |
-| tool_results | JSONB | If this is a tool result |
+| role | TEXT | CHECK: `'user'`, `'assistant'`, `'system'`, `'tool'` |
+| content | TEXT | Nullable — omitted when assistant turn is tool-calls only |
+| tool_calls | JSONB | Assistant rows only; list of `{ id, name, args }` objects |
+| tool_call_id | TEXT | `role='tool'` rows; references the assistant's `tool_calls[].id` |
+| provider | TEXT | Nullable; `'gemini'` or `'claude'` on assistant rows |
 | created_at | TIMESTAMPTZ | |
 
-**Indexes:** `(conversation_id, created_at)`
+**Indexes:** `(conversation_id, created_at ASC)` — history fetch in chronological order
+
+### Chat model — tool-call turns
+
+When the LLM invokes a tool the conversation log stores two rows:
+
+1. An `assistant` row whose `tool_calls` JSONB contains one entry per tool invoked:
+   ```json
+   [{ "id": "call_abc", "name": "create_block", "args": { "title": "Gym", ... } }]
+   ```
+   `content` may be NULL if the assistant produced no prose in that turn.
+
+2. One `tool` row per result, with `tool_call_id` matching the assistant's `tool_calls[].id`:
+   ```json
+   role = "tool", tool_call_id = "call_abc", content = "Block created with id=..."
+   ```
+
+This mirrors the OpenAI / Gemini function-calling wire format and lets the backend replay the full conversation history when making follow-up LLM calls.
+
+### Chat model — system prompt composition
+
+On every conversation turn the backend builds the system prompt from three sources, in order:
+
+1. **Static instructions** — tool schemas, formatting rules, persona.
+2. **`users.planner_context`** — injected verbatim when non-NULL. This is the user's self-authored "about me" text (job, weekly intent, long-term goals). It gives the LLM standing personal context without requiring the user to restate it each session. Users can update this field at any time via the profile/settings UI; the next turn immediately reflects the change.
+3. **Active routine state** — the current routine's blocks, labels, and rules serialised to a compact text representation, when a `routine_id` is set on the conversation.
+
+`planner_context` is intentionally separate from `users.preferences` (which stores provider toggle and UI preferences) because it is narrative text consumed by the LLM, not a machine-readable config value.
 
 ### `rules`
 Monthly rules/guidelines for a routine.
