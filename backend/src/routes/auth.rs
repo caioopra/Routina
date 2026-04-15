@@ -1,5 +1,10 @@
+use std::sync::OnceLock;
+
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
 use axum::{Json, Router, extract::State, routing::get, routing::post};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -9,6 +14,26 @@ use crate::middleware::error::AppError;
 use crate::models::user::{AuthResponse, CreateUser, LoginRequest, User, UserPublic};
 
 use super::AppState;
+
+/// A dummy password hash computed once at first use.
+///
+/// When a login request arrives for an email that does not exist in the
+/// database, the handler calls `verify_password` against this hash with the
+/// supplied (wrong) password.  This ensures the slow argon2 path runs
+/// regardless of whether the email exists, preventing a timing side-channel
+/// that would allow an attacker to enumerate registered addresses by measuring
+/// response latency.
+///
+/// The hash is generated from a hardcoded placeholder string so it is always
+/// well-formed (argon2 encoded format).  The verification will always fail —
+/// the result is intentionally discarded.
+static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+
+fn dummy_hash() -> &'static str {
+    DUMMY_HASH.get_or_init(|| {
+        hash_password("placeholder-dummy-constant").expect("dummy hash generation must not fail")
+    })
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -56,7 +81,7 @@ async fn register(
     let insert_result = sqlx::query_as::<_, User>(
         "INSERT INTO users (id, email, name, password_hash, preferences) \
          VALUES ($1, $2, $3, $4, '{}'::jsonb) \
-         RETURNING id, email, name, password_hash, preferences, created_at, updated_at",
+         RETURNING id, email, name, password_hash, preferences, created_at, updated_at, role",
     )
     .bind(user_id)
     .bind(&body.email)
@@ -88,19 +113,56 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<AuthResponse>, AppError> {
-    let user = sqlx::query_as::<_, User>(
-        "SELECT id, email, name, password_hash, preferences, created_at, updated_at \
+) -> Result<impl IntoResponse, AppError> {
+    // Normalize email before rate-limit check so that "User@Example.com" and
+    // "user@example.com" share the same bucket.
+    let normalized_email = body.email.trim().to_lowercase();
+
+    // Check the per-email rate limit BEFORE any DB lookup or password
+    // comparison.  This prevents timing-oracle attacks: the 429 response is
+    // returned unconditionally regardless of whether the email exists in the
+    // database, so an attacker cannot use the 429 threshold to confirm that an
+    // email is registered.
+    if let Err(retry_after) = state.login_rate_limit.check_and_record(&normalized_email) {
+        let body = json!({
+            "error": "rate_limited",
+            "retry_after_seconds": retry_after,
+        });
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after.to_string())],
+            Json(body),
+        )
+            .into_response());
+    }
+
+    let user_opt = sqlx::query_as::<_, User>(
+        "SELECT id, email, name, password_hash, preferences, created_at, updated_at, role \
          FROM users WHERE email = $1",
     )
-    .bind(&body.email)
+    .bind(&normalized_email)
     .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    .await?;
+
+    // When the email is not found, run `verify_password` against the static
+    // dummy hash anyway.  This equalizes the response time for the "email not
+    // found" and "wrong password" cases, preventing a timing side-channel that
+    // would allow an attacker to enumerate which addresses are registered.
+    // The result is always `false` (wrong password); we discard it and fall
+    // through to the same `Unauthorized` error returned for a wrong password.
+    let Some(user) = user_opt else {
+        let _ = verify_password(&body.password, dummy_hash());
+        return Err(AppError::Unauthorized);
+    };
 
     if !verify_password(&body.password, &user.password_hash)? {
         return Err(AppError::Unauthorized);
     }
+
+    // Successful login: clear the rate-limit bucket so the next N attempts
+    // start from zero.  This avoids locking out a legitimate user who had
+    // earlier failures (e.g., mistyped their password a few times).
+    state.login_rate_limit.clear(&normalized_email);
 
     let (token, refresh_token) = mint_token_pair(&state, user.id)?;
 
@@ -108,7 +170,8 @@ async fn login(
         user: UserPublic::from(user),
         token,
         refresh_token,
-    }))
+    })
+    .into_response())
 }
 
 async fn refresh(
