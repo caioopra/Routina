@@ -33,6 +33,10 @@ use crate::auth::{TokenKind, decode_token};
 use crate::routes::AppState;
 
 const WINDOW_SECS: u64 = 60;
+/// Sliding-window duration for the per-email login rate limiter (15 minutes).
+pub const LOGIN_RATE_WINDOW_SECS: u64 = 900;
+/// Maximum failed/unvalidated login attempts per email per window.
+pub const LOGIN_RATE_MAX: usize = 10;
 /// Sweep empty buckets from the map roughly every N successful `check_and_record` calls.
 const SWEEP_INTERVAL: u64 = 100;
 
@@ -125,6 +129,82 @@ impl RateLimitState {
         }
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-email login rate limiter
+// ---------------------------------------------------------------------------
+
+/// Sliding-window rate limiter keyed on a `String` (normalized email address).
+///
+/// Used by the login handler to limit brute-force/credential-stuffing attempts
+/// before the password hash comparison is even attempted.
+///
+/// Design choice: every login attempt (successful or not) increments the
+/// bucket; a successful login resets (clears) the bucket for that email.
+/// This means an attacker who finds the correct password on attempt N ≤ limit
+/// still succeeds, but subsequent attempts restart from zero — preventing
+/// indefinite harassment while letting the real user log in.  The alternative
+/// (only counting failures) would allow an attacker to interleave one correct
+/// attempt per window to keep resetting, which is worse.
+#[derive(Clone)]
+pub struct EmailRateLimitState {
+    pub buckets: Arc<DashMap<String, VecDeque<Instant>>>,
+    pub max_attempts: usize,
+    pub window_secs: u64,
+}
+
+impl EmailRateLimitState {
+    pub fn new(max_attempts: usize, window_secs: u64) -> Self {
+        Self {
+            buckets: Arc::new(DashMap::new()),
+            max_attempts,
+            window_secs,
+        }
+    }
+
+    /// Check and record a login attempt for `email`.
+    ///
+    /// Returns `Ok(())` if the attempt is within the limit, or
+    /// `Err(retry_after_secs)` if the cap has been reached.
+    ///
+    /// The check happens BEFORE the DB lookup or password comparison, so the
+    /// response does not reveal whether the email exists in the database.
+    pub fn check_and_record(&self, email: &str) -> Result<(), u64> {
+        let window = tokio::time::Duration::from_secs(self.window_secs);
+        let now = Instant::now();
+
+        let mut entry = self.buckets.entry(email.to_owned()).or_default();
+        let deque = entry.value_mut();
+
+        // Evict timestamps older than the sliding window.
+        let cutoff = now.checked_sub(window).unwrap_or(now);
+        while let Some(&front) = deque.front() {
+            if front <= cutoff {
+                deque.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if deque.len() >= self.max_attempts {
+            let oldest = *deque.front().unwrap(); // safe: len >= 1
+            let elapsed = now.duration_since(oldest);
+            let retry_after = self.window_secs.saturating_sub(elapsed.as_secs());
+            return Err(retry_after.max(1));
+        }
+
+        deque.push_back(now);
+        Ok(())
+    }
+
+    /// Clear the rate-limit bucket for `email` on a successful login.
+    ///
+    /// Removing the entry entirely means the next attempt starts with a clean
+    /// slate rather than carrying forward stale timestamps.
+    pub fn clear(&self, email: &str) {
+        self.buckets.remove(email);
     }
 }
 
