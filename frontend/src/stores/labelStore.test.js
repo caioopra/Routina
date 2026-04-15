@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useLabelStore } from "./labelStore";
 import { useAuthStore } from "./authStore";
-import { seedLabels } from "../test/mocks/handlers";
+import { seedLabels, resetMockState } from "../test/mocks/handlers";
 
 function resetStore() {
   useLabelStore.setState({ labels: [], loading: false, error: null });
@@ -9,6 +9,7 @@ function resetStore() {
 
 describe("labelStore", () => {
   beforeEach(() => {
+    resetMockState();
     resetStore();
     useAuthStore.getState().setAuth({
       user: { id: "u1", email: "a@b.com", name: "A" },

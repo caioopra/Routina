@@ -13,6 +13,7 @@ import {
   seedBlocks,
   seedLabels,
   seedRules,
+  resetMockState,
 } from "../test/mocks/handlers";
 
 const ROUTINE_ID = "routine-42";
@@ -36,6 +37,7 @@ function renderPage(routineId = ROUTINE_ID) {
 
 describe("RoutineDetail page", () => {
   beforeEach(() => {
+    resetMockState();
     resetStores();
     useAuthStore.getState().setAuth({
       user: { id: "u1", email: "a@b.com", name: "A" },
@@ -221,5 +223,164 @@ describe("RoutineDetail page", () => {
       screen.getByRole("dialog", { name: /edit block/i }),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Planner study")).toBeInTheDocument();
+  });
+
+  it("shows not-found state when routines list loads empty and ID is unknown", async () => {
+    // No matching routine seeded — API returns empty list for this ID
+    resetMockState();
+    useAuthStore.getState().setAuth({
+      user: { id: "u1", email: "a@b.com", name: "A" },
+      token: "token-1",
+      refresh_token: "refresh-1",
+    });
+    seedRoutines([]);
+
+    renderPage("nonexistent-id");
+
+    expect(await screen.findByText(/routine not found/i)).toBeInTheDocument();
+  });
+
+  it("confirms then deletes a block via inline confirm", async () => {
+    seedBlocks([
+      {
+        id: "b1",
+        routine_id: ROUTINE_ID,
+        day_of_week: 0,
+        start_time: "09:00",
+        title: "Block to remove",
+        type: "trabalho",
+        labels: [],
+        subtasks: [],
+        sort_order: 0,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findAllByText("Block to remove")).not.toHaveLength(0);
+
+    // First click shows confirm prompt
+    const deleteBtn = screen.getAllByRole("button", {
+      name: /delete block: block to remove/i,
+    })[0];
+    await user.click(deleteBtn);
+
+    // Confirm buttons appear
+    expect(
+      screen.getAllByRole("button", { name: /confirm delete block/i })[0],
+    ).toBeInTheDocument();
+
+    // Second click (Yes) actually deletes
+    const confirmBtn = screen.getAllByRole("button", {
+      name: /confirm delete block/i,
+    })[0];
+    await user.click(confirmBtn);
+
+    // Block disappears
+    await vi.waitFor(() => {
+      expect(screen.queryAllByText("Block to remove")).toHaveLength(0);
+    });
+  });
+
+  it("cancels block deletion via inline confirm", async () => {
+    seedBlocks([
+      {
+        id: "b1",
+        routine_id: ROUTINE_ID,
+        day_of_week: 0,
+        start_time: "09:00",
+        title: "Keep this block",
+        type: "trabalho",
+        labels: [],
+        subtasks: [],
+        sort_order: 0,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findAllByText("Keep this block")).not.toHaveLength(0);
+
+    // First click shows confirm prompt
+    const deleteBtn = screen.getAllByRole("button", {
+      name: /delete block: keep this block/i,
+    })[0];
+    await user.click(deleteBtn);
+
+    // Click No to cancel
+    const cancelBtn = screen.getAllByRole("button", {
+      name: /cancel delete$/i,
+    })[0];
+    await user.click(cancelBtn);
+
+    // Block is still there
+    expect(screen.getAllByText("Keep this block")).not.toHaveLength(0);
+    // Confirm buttons gone
+    expect(
+      screen.queryAllByRole("button", { name: /confirm delete block/i }),
+    ).toHaveLength(0);
+  });
+
+  it("confirms then deletes a rule via inline confirm", async () => {
+    seedRules([
+      {
+        id: "rule-del",
+        routine_id: ROUTINE_ID,
+        text: "Rule to delete",
+        sort_order: 0,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("Rule to delete")).toBeInTheDocument();
+
+    // First click — shows confirm prompt
+    await user.click(
+      screen.getByRole("button", { name: /delete rule: rule to delete/i }),
+    );
+    expect(
+      screen.getByRole("button", { name: /confirm delete rule/i }),
+    ).toBeInTheDocument();
+
+    // Confirm deletion
+    await user.click(
+      screen.getByRole("button", { name: /confirm delete rule/i }),
+    );
+    expect(screen.queryByText("Rule to delete")).not.toBeInTheDocument();
+  });
+
+  it("cancels rule deletion via inline confirm", async () => {
+    seedRules([
+      {
+        id: "rule-keep",
+        routine_id: ROUTINE_ID,
+        text: "Rule to keep",
+        sort_order: 0,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("Rule to keep")).toBeInTheDocument();
+
+    // First click — shows confirm prompt
+    await user.click(
+      screen.getByRole("button", { name: /delete rule: rule to keep/i }),
+    );
+    expect(
+      screen.getByRole("button", { name: /confirm delete rule/i }),
+    ).toBeInTheDocument();
+
+    // Click No
+    await user.click(
+      screen.getByRole("button", { name: /cancel delete rule/i }),
+    );
+
+    // Rule is still there
+    expect(screen.getByText("Rule to keep")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /confirm delete rule/i }),
+    ).not.toBeInTheDocument();
   });
 });

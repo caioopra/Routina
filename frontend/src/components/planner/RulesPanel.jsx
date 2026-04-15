@@ -1,6 +1,13 @@
 import { useState } from "react";
 
-export default function RulesPanel({ rules, onAdd, onEdit, onDelete }) {
+export default function RulesPanel({
+  rules,
+  onAdd,
+  onEdit,
+  onDelete,
+  confirmingDeleteRuleId = null,
+  onCancelDeleteRule,
+}) {
   const [adding, setAdding] = useState(false);
   const [newText, setNewText] = useState("");
   const [addError, setAddError] = useState("");
@@ -106,6 +113,7 @@ export default function RulesPanel({ rules, onAdd, onEdit, onDelete }) {
                 onChange={(e) => setEditText(e.target.value)}
                 rows={2}
                 autoFocus
+                aria-label="Rule text"
                 className="bg-overlay border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:border-accent text-sm resize-none"
               />
               {editError && (
@@ -142,24 +150,46 @@ export default function RulesPanel({ rules, onAdd, onEdit, onDelete }) {
               <p className="flex-1 text-sm text-text-secondary leading-relaxed">
                 {rule.text}
               </p>
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                <button
-                  type="button"
-                  onClick={() => startEdit(rule)}
-                  aria-label={`Edit rule: ${rule.text}`}
-                  className="text-xs text-text-muted hover:text-accent px-2 py-1 rounded transition-colors"
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDelete(rule.id)}
-                  aria-label={`Delete rule: ${rule.text}`}
-                  className="text-xs text-red-400/70 hover:text-red-400 px-2 py-1 rounded transition-colors"
-                >
-                  Delete
-                </button>
-              </div>
+              {confirmingDeleteRuleId === rule.id ? (
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className="text-xs text-red-400">Sure?</span>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(rule.id)}
+                    aria-label={`Confirm delete rule: ${rule.text}`}
+                    className="text-xs text-red-300 bg-red-500/20 hover:bg-red-500/40 px-2 py-1 rounded transition-colors"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCancelDeleteRule}
+                    aria-label="Cancel delete rule"
+                    className="text-xs text-text-muted hover:text-text-secondary px-2 py-1 rounded transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => startEdit(rule)}
+                    aria-label={`Edit rule: ${rule.text}`}
+                    className="text-xs text-text-muted hover:text-accent px-2 py-1 rounded transition-colors"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(rule.id)}
+                    aria-label={`Delete rule: ${rule.text}`}
+                    className="text-xs text-red-400/70 hover:text-red-400 px-2 py-1 rounded transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
             </div>
           ),
         )}
@@ -182,6 +212,7 @@ export default function RulesPanel({ rules, onAdd, onEdit, onDelete }) {
               placeholder="e.g. No social media before 10am"
               rows={2}
               autoFocus
+              aria-label="Rule text"
               className="bg-overlay border border-border rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:border-accent text-sm resize-none placeholder:text-text-muted"
             />
             {addError && (

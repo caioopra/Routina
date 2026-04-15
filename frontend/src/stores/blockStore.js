@@ -52,11 +52,11 @@ export const useBlockStore = create((set, get) => ({
 
   create: async (routineId, body) => {
     const store = get();
+    const snapshot = store._getSlice(routineId);
     store._setSlice(routineId, { error: null });
     try {
       const created = await createBlock(routineId, body);
-      const slice = store._getSlice(routineId);
-      store._setSlice(routineId, { blocks: [...slice.blocks, created] });
+      store._setSlice(routineId, { blocks: [...snapshot.blocks, created] });
       return created;
     } catch (err) {
       store._setSlice(routineId, {
@@ -68,12 +68,12 @@ export const useBlockStore = create((set, get) => ({
 
   update: async (routineId, id, body) => {
     const store = get();
+    const snapshot = store._getSlice(routineId);
     store._setSlice(routineId, { error: null });
     try {
       const updated = await updateBlock(id, body);
-      const slice = store._getSlice(routineId);
       store._setSlice(routineId, {
-        blocks: slice.blocks.map((b) =>
+        blocks: snapshot.blocks.map((b) =>
           b.id === id ? { ...b, ...updated } : b,
         ),
       });
@@ -88,12 +88,12 @@ export const useBlockStore = create((set, get) => ({
 
   remove: async (routineId, id) => {
     const store = get();
+    const snapshot = store._getSlice(routineId);
     store._setSlice(routineId, { error: null });
     try {
       await removeBlock(id);
-      const slice = store._getSlice(routineId);
       store._setSlice(routineId, {
-        blocks: slice.blocks.filter((b) => b.id !== id),
+        blocks: snapshot.blocks.filter((b) => b.id !== id),
       });
     } catch (err) {
       store._setSlice(routineId, {

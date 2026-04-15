@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Login from "./Login";
 import { useAuthStore } from "../stores/authStore";
 import { register } from "../api/auth";
+import { resetMockState } from "../test/mocks/handlers";
 
 function renderLogin() {
   return render(
@@ -19,6 +20,7 @@ function renderLogin() {
 
 describe("Login", () => {
   beforeEach(() => {
+    resetMockState();
     useAuthStore.getState().logout();
     localStorage.clear();
   });

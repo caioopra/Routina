@@ -37,6 +37,7 @@ export default function RoutineDetail() {
   const { id } = useParams();
 
   const routines = useRoutineStore((s) => s.routines);
+  const routinesLoading = useRoutineStore((s) => s.loading);
   const fetchRoutines = useRoutineStore((s) => s.fetchRoutines);
 
   const blocksByRoutine = useBlockStore((s) => s.byRoutine);
@@ -63,6 +64,8 @@ export default function RoutineDetail() {
   const [modalDay, setModalDay] = useState(0);
   const [editingBlock, setEditingBlock] = useState(null);
   const [selectedDay, setSelectedDay] = useState(0); // for mobile
+  const [confirmDeleteBlockId, setConfirmDeleteBlockId] = useState(null);
+  const [confirmDeleteRuleId, setConfirmDeleteRuleId] = useState(null);
 
   // Derive routine from store (may not be loaded yet)
   const routine = routines.find((r) => r.id === id);
@@ -83,7 +86,7 @@ export default function RoutineDetail() {
     fetchBlocks(id);
     fetchLabels();
     fetchRules(id);
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, routine, fetchRoutines, fetchBlocks, fetchLabels, fetchRules]);
 
   // Group blocks by day_of_week
   const blocksByDay = Array.from({ length: 7 }, (_, i) =>
@@ -118,7 +121,11 @@ export default function RoutineDetail() {
   }
 
   async function handleDeleteBlock(blockId) {
-    if (!window.confirm("Delete this block?")) return;
+    if (confirmDeleteBlockId !== blockId) {
+      setConfirmDeleteBlockId(blockId);
+      return;
+    }
+    setConfirmDeleteBlockId(null);
     await removeBlock(id, blockId);
   }
 
@@ -131,15 +138,28 @@ export default function RoutineDetail() {
   }
 
   async function handleDeleteRule(ruleId) {
-    if (!window.confirm("Delete this rule?")) return;
+    if (confirmDeleteRuleId !== ruleId) {
+      setConfirmDeleteRuleId(ruleId);
+      return;
+    }
+    setConfirmDeleteRuleId(null);
     await removeRule(id, ruleId);
   }
 
-  // Loading state if we have no routine info and blocks are loading
-  if (!routine && blockSlice.loading) {
+  // Show spinner while routines or blocks are being fetched and we have no data yet
+  if (!routine && (routinesLoading || blockSlice.loading)) {
     return (
       <div className="min-h-screen bg-base flex items-center justify-center">
         <p className="text-text-secondary">Loading routine...</p>
+      </div>
+    );
+  }
+
+  // Routines finished loading but this ID was not found
+  if (!routine && !routinesLoading) {
+    return (
+      <div className="min-h-screen bg-base flex items-center justify-center">
+        <p className="text-text-secondary">Routine not found.</p>
       </div>
     );
   }
@@ -240,6 +260,8 @@ export default function RoutineDetail() {
                           compact
                           onEdit={() => openEditModal(block)}
                           onDelete={() => handleDeleteBlock(block.id)}
+                          confirmingDelete={confirmDeleteBlockId === block.id}
+                          onCancelDelete={() => setConfirmDeleteBlockId(null)}
                         />
                       ))}
 
@@ -303,6 +325,8 @@ export default function RoutineDetail() {
                   block={block}
                   onEdit={() => openEditModal(block)}
                   onDelete={() => handleDeleteBlock(block.id)}
+                  confirmingDelete={confirmDeleteBlockId === block.id}
+                  onCancelDelete={() => setConfirmDeleteBlockId(null)}
                 />
               ))}
               {blocksByDay[selectedDay].length === 0 && (
@@ -331,7 +355,7 @@ export default function RoutineDetail() {
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                aria-label={tab}
+                aria-pressed={activeTab === tab}
                 className="flex-1 py-1.5 text-sm font-medium rounded-lg transition-all"
                 style={{
                   background:
@@ -357,6 +381,8 @@ export default function RoutineDetail() {
                 onAdd={handleAddRule}
                 onEdit={handleEditRule}
                 onDelete={handleDeleteRule}
+                confirmingDeleteRuleId={confirmDeleteRuleId}
+                onCancelDeleteRule={() => setConfirmDeleteRuleId(null)}
               />
             )}
             {activeTab === "Labels" && (
@@ -398,7 +424,14 @@ export default function RoutineDetail() {
 
 // ── BlockCard sub-component ──
 
-function BlockCard({ block, compact = false, onEdit, onDelete }) {
+function BlockCard({
+  block,
+  compact = false,
+  onEdit,
+  onDelete,
+  confirmingDelete = false,
+  onCancelDelete,
+}) {
   const c = COLORS[block.type] ?? COLORS.trabalho;
   return (
     <div
@@ -452,24 +485,46 @@ function BlockCard({ block, compact = false, onEdit, onDelete }) {
       )}
 
       {/* Action buttons on hover */}
-      <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          type="button"
-          onClick={onEdit}
-          aria-label={`Edit block: ${block.title}`}
-          className="text-xs bg-overlay/80 hover:bg-overlay border border-border rounded px-1.5 py-0.5 text-text-muted hover:text-accent transition-colors"
-        >
-          Edit
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          aria-label={`Delete block: ${block.title}`}
-          className="text-xs bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded px-1.5 py-0.5 text-red-400/70 hover:text-red-400 transition-colors"
-        >
-          Del
-        </button>
-      </div>
+      {confirmingDelete ? (
+        <div className="absolute top-1 right-1 flex items-center gap-1">
+          <span className="text-xs text-red-400">Sure?</span>
+          <button
+            type="button"
+            onClick={onDelete}
+            aria-label={`Confirm delete block: ${block.title}`}
+            className="text-xs bg-red-500/30 hover:bg-red-500/50 border border-red-500/40 rounded px-1.5 py-0.5 text-red-300 transition-colors"
+          >
+            Yes
+          </button>
+          <button
+            type="button"
+            onClick={onCancelDelete}
+            aria-label="Cancel delete"
+            className="text-xs bg-overlay/80 hover:bg-overlay border border-border rounded px-1.5 py-0.5 text-text-muted transition-colors"
+          >
+            No
+          </button>
+        </div>
+      ) : (
+        <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={`Edit block: ${block.title}`}
+            className="text-xs bg-overlay/80 hover:bg-overlay border border-border rounded px-1.5 py-0.5 text-text-muted hover:text-accent transition-colors"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            aria-label={`Delete block: ${block.title}`}
+            className="text-xs bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded px-1.5 py-0.5 text-red-400/70 hover:text-red-400 transition-colors"
+          >
+            Del
+          </button>
+        </div>
+      )}
     </div>
   );
 }

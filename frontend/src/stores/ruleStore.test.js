@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useRuleStore } from "./ruleStore";
 import { useAuthStore } from "./authStore";
-import { seedRoutines, seedRules } from "../test/mocks/handlers";
+import {
+  seedRoutines,
+  seedRules,
+  resetMockState,
+} from "../test/mocks/handlers";
 
 const ROUTINE_ID = "routine-1";
 
@@ -11,6 +15,7 @@ function resetStore() {
 
 describe("ruleStore", () => {
   beforeEach(() => {
+    resetMockState();
     resetStore();
     useAuthStore.getState().setAuth({
       user: { id: "u1", email: "a@b.com", name: "A" },

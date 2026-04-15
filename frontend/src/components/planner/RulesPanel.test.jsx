@@ -45,7 +45,7 @@ describe("RulesPanel", () => {
     await user.click(screen.getByRole("button", { name: /add rule/i }));
 
     const form = screen.getByRole("form", { name: /add rule form/i });
-    await user.type(within(form).getByRole("textbox"), "New rule");
+    await user.type(within(form).getByLabelText(/rule text/i), "New rule");
     await user.click(within(form).getByRole("button", { name: /add rule/i }));
 
     expect(onAdd).toHaveBeenCalledWith({ text: "New rule" });
@@ -106,7 +106,7 @@ describe("RulesPanel", () => {
     );
 
     const form = screen.getByRole("form", { name: /edit rule form/i });
-    const textarea = within(form).getByRole("textbox");
+    const textarea = within(form).getByLabelText(/rule text/i);
     await user.clear(textarea);
     await user.type(textarea, "Updated rule text");
     await user.click(within(form).getByRole("button", { name: /^save$/i }));
@@ -125,7 +125,7 @@ describe("RulesPanel", () => {
     );
 
     const form = screen.getByRole("form", { name: /edit rule form/i });
-    const textarea = within(form).getByRole("textbox");
+    const textarea = within(form).getByLabelText(/rule text/i);
     await user.clear(textarea);
     await user.click(within(form).getByRole("button", { name: /^save$/i }));
 

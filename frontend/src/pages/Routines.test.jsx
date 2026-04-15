@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import Routines from "./Routines";
 import { useRoutineStore } from "../stores/routineStore";
 import { useAuthStore } from "../stores/authStore";
-import { seedRoutines } from "../test/mocks/handlers";
+import { seedRoutines, resetMockState } from "../test/mocks/handlers";
 
 function renderPage() {
   return render(
@@ -17,6 +17,7 @@ function renderPage() {
 
 describe("Routines page", () => {
   beforeEach(() => {
+    resetMockState();
     useRoutineStore.setState({ routines: [], loading: false, error: null });
     useAuthStore.getState().setAuth({
       user: { id: "u1", email: "a@b.com", name: "A" },
