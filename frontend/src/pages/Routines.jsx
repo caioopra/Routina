@@ -168,7 +168,10 @@ export default function Routines() {
                 data-testid={`routine-${routine.id}`}
                 className="bg-surface border border-border rounded-2xl p-5 shadow-lg flex items-center justify-between"
               >
-                <div className="min-w-0">
+                <Link
+                  to={`/routines/${routine.id}`}
+                  className="min-w-0 flex-1 -m-2 p-2 rounded-xl hover:bg-raised transition-colors"
+                >
                   <div className="flex items-center gap-3">
                     <h3 className="font-display text-lg font-semibold text-text-primary truncate">
                       {routine.name}
@@ -185,7 +188,7 @@ export default function Routines() {
                   <p className="text-text-muted text-sm mt-1">
                     {routine.period || "weekly"}
                   </p>
-                </div>
+                </Link>
                 <div className="flex items-center gap-2 shrink-0">
                   {!routine.is_active && (
                     <button
