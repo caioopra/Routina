@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use planner_backend::{ai::gemini::GeminiProvider, config, db, routes};
+use planner_backend::ai::provider::LlmProvider;
+use planner_backend::{ai::claude::ClaudeProvider, ai::gemini::GeminiProvider, config, db, routes};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -27,28 +29,48 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Running migrations...");
     db::run_migrations(&pool).await?;
 
-    // Build LLM provider — optional: if GEMINI_API_KEY is absent the chat
-    // endpoint will return 503 rather than crashing the process.
-    let llm_provider = match &config.llm_gemini_api_key {
+    // Build LLM providers map — include whichever keys are configured.
+    let mut providers: HashMap<String, Arc<dyn LlmProvider>> = HashMap::new();
+
+    match &config.llm_gemini_api_key {
         Some(key) => {
             tracing::info!(
                 "GeminiProvider initialised with model {}",
                 config.llm_gemini_model
             );
-            Some(Arc::new(GeminiProvider::new(
+            let p = Arc::new(GeminiProvider::new(
                 key.clone(),
                 config.llm_gemini_model.clone(),
-            ))
-                as Arc<dyn planner_backend::ai::provider::LlmProvider>)
+            )) as Arc<dyn LlmProvider>;
+            providers.insert("gemini".to_string(), p);
         }
         None => {
-            tracing::warn!(
-                "GEMINI_API_KEY / LLM_GEMINI_API_KEY not set — \
-                 chat endpoint will return 503 until a key is provided"
-            );
-            None
+            tracing::warn!("LLM_GEMINI_API_KEY not set — Gemini provider unavailable");
         }
-    };
+    }
+
+    match &config.llm_claude_api_key {
+        Some(key) => {
+            tracing::info!(
+                "ClaudeProvider initialised with model {}",
+                config.llm_claude_model
+            );
+            let p = Arc::new(ClaudeProvider::new(
+                key.clone(),
+                config.llm_claude_model.clone(),
+            )) as Arc<dyn LlmProvider>;
+            providers.insert("claude".to_string(), p);
+        }
+        None => {
+            tracing::warn!("LLM_CLAUDE_API_KEY not set — Claude provider unavailable");
+        }
+    }
+
+    if providers.is_empty() {
+        tracing::warn!(
+            "No LLM providers configured — chat endpoint will return 503 until at least one key is provided"
+        );
+    }
 
     // Build CORS layer
     let cors = CorsLayer::new()
@@ -62,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers(Any);
 
     // Build router
-    let app = routes::create_router_with_provider(pool, config, llm_provider)
+    let app = routes::create_router_with_providers(pool, config, providers)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 

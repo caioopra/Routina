@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -41,7 +42,7 @@ pub fn test_config() -> Config {
 }
 
 // ---------------------------------------------------------------------------
-// MockLlmProvider
+// MockLlmProvider — simple token-list variant
 // ---------------------------------------------------------------------------
 
 /// Deterministic mock provider that returns a canned token sequence then Done.
@@ -102,17 +103,96 @@ impl LlmProvider for MockLlmProvider {
 }
 
 // ---------------------------------------------------------------------------
+// ScriptedMockProvider — per-round scripted event sequences
+// ---------------------------------------------------------------------------
+
+/// A scripted mock provider that returns different event sequences on each call.
+///
+/// On the first `stream_completion` call it returns `rounds[0]`, on the
+/// second it returns `rounds[1]`, etc.  Once all rounds are exhausted it
+/// returns a single `Done(Stop)` for any subsequent calls.
+pub struct ScriptedMockProvider {
+    /// Pre-programmed event sequences, one per invocation.
+    pub rounds: std::sync::Mutex<Vec<Vec<ProviderEvent>>>,
+    /// Accumulates the messages passed to each `stream_completion` call.
+    pub captured_messages: std::sync::Mutex<Vec<Vec<Message>>>,
+    /// Provider name returned by `name()`.
+    pub provider_name: &'static str,
+}
+
+impl ScriptedMockProvider {
+    /// Create a new `ScriptedMockProvider` with the given rounds.
+    /// `provider_name` defaults to `"mock_scripted"`.
+    pub fn new(rounds: Vec<Vec<ProviderEvent>>) -> Self {
+        Self {
+            rounds: std::sync::Mutex::new(rounds),
+            captured_messages: std::sync::Mutex::new(Vec::new()),
+            provider_name: "mock_scripted",
+        }
+    }
+
+    pub fn with_name(mut self, name: &'static str) -> Self {
+        self.provider_name = name;
+        self
+    }
+
+    /// Wrap in `Arc<dyn LlmProvider>` for injection into `AppState`.
+    pub fn into_shared(self) -> Arc<Self> {
+        Arc::new(self)
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ScriptedMockProvider {
+    fn name(&self) -> &'static str {
+        self.provider_name
+    }
+
+    async fn stream_completion(
+        &self,
+        messages: &[Message],
+        _tools: &[ToolSchema],
+    ) -> Result<Pin<Box<dyn Stream<Item = ProviderEvent> + Send>>, ProviderError> {
+        self.captured_messages
+            .lock()
+            .unwrap()
+            .push(messages.to_vec());
+
+        let mut guard = self.rounds.lock().unwrap();
+        let events = if guard.is_empty() {
+            vec![ProviderEvent::Done {
+                finish_reason: FinishReason::Stop,
+            }]
+        } else {
+            guard.remove(0)
+        };
+        Ok(Box::pin(stream::iter(events)))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // App builders
 // ---------------------------------------------------------------------------
 
 /// Build app with no LLM provider (chat returns 503).
 pub fn build_app(pool: PgPool) -> Router {
-    routes::create_router_with_provider(pool, test_config(), None)
+    routes::create_router_with_providers(pool, test_config(), HashMap::new())
 }
 
-/// Build app with the given `MockLlmProvider`.
+/// Build app with the given mock as the sole provider (keyed as `"mock"`).
 pub fn build_app_with_mock(pool: PgPool, mock: Arc<dyn LlmProvider>) -> Router {
-    routes::create_router_with_provider(pool, test_config(), Some(mock))
+    let mut providers = HashMap::new();
+    let name = mock.name().to_string();
+    providers.insert(name, mock);
+    routes::create_router_with_providers(pool, test_config(), providers)
+}
+
+/// Build app with a map of named providers — lets tests inject multiple mocks.
+pub fn build_app_with_providers(
+    pool: PgPool,
+    providers: HashMap<String, Arc<dyn LlmProvider>>,
+) -> Router {
+    routes::create_router_with_providers(pool, test_config(), providers)
 }
 
 // ---------------------------------------------------------------------------

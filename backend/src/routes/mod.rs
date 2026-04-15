@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Router;
@@ -17,15 +18,28 @@ pub mod labels;
 pub mod me;
 pub mod routines;
 pub mod rules;
+pub mod settings;
 
 pub fn create_router(pool: PgPool, config: Config) -> Router {
-    create_router_with_provider(pool, config, None)
+    create_router_with_providers(pool, config, HashMap::new())
 }
 
 pub fn create_router_with_provider(
     pool: PgPool,
     config: Config,
     llm_provider: Option<Arc<dyn LlmProvider>>,
+) -> Router {
+    let mut providers = HashMap::new();
+    if let Some(p) = llm_provider {
+        providers.insert(p.name().to_string(), p);
+    }
+    create_router_with_providers(pool, config, providers)
+}
+
+pub fn create_router_with_providers(
+    pool: PgPool,
+    config: Config,
+    providers: HashMap<String, Arc<dyn LlmProvider>>,
 ) -> Router {
     let api = Router::new()
         .nest("/health", health::router())
@@ -44,12 +58,14 @@ pub fn create_router_with_provider(
         // Chat SSE
         .nest("/chat", chat::router())
         // Me (planner context)
-        .nest("/me", me::router());
+        .nest("/me", me::router())
+        // Settings (provider toggle)
+        .nest("/settings", settings::router());
 
     Router::new().nest("/api", api).with_state(AppState {
         pool,
         config,
-        llm_provider,
+        providers,
     })
 }
 
@@ -57,21 +73,39 @@ pub fn create_router_with_provider(
 pub struct AppState {
     pub pool: PgPool,
     pub config: Config,
-    /// Shared LLM provider instance.  `None` when `GEMINI_API_KEY` is absent at
-    /// startup — the chat handler returns 503 in that case rather than panicking.
-    pub llm_provider: Option<Arc<dyn LlmProvider>>,
+    /// Map of provider name → Arc<dyn LlmProvider>.
+    /// Keys that are missing from the map indicate the provider key was not
+    /// configured at startup.  The chat handler reads the user's selected
+    /// provider from `users.preferences` and falls back to the first available
+    /// if the selection is unavailable.
+    pub providers: HashMap<String, Arc<dyn LlmProvider>>,
+}
+
+impl AppState {
+    /// Returns the provider to use for the given user preference, falling back
+    /// to the first available provider if the preferred one is unavailable.
+    pub fn resolve_provider(&self, preferred: Option<&str>) -> Option<Arc<dyn LlmProvider>> {
+        // Try preferred provider first.
+        if let Some(name) = preferred
+            && let Some(p) = self.providers.get(name)
+        {
+            return Some(p.clone());
+        }
+        // Fall back to first available (deterministic: sorted by key name).
+        let mut keys: Vec<&String> = self.providers.keys().collect();
+        keys.sort();
+        keys.first().and_then(|k| self.providers.get(*k)).cloned()
+    }
 }
 
 // Manual Debug impl because `dyn LlmProvider` doesn't implement Debug.
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.providers.keys().map(String::as_str).collect();
         f.debug_struct("AppState")
             .field("pool", &self.pool)
             .field("config", &self.config)
-            .field(
-                "llm_provider",
-                &self.llm_provider.as_ref().map(|p| p.name()),
-            )
+            .field("providers", &names)
             .finish()
     }
 }
