@@ -14,6 +14,8 @@ function resetStore() {
     messages: {},
     streaming: false,
     pendingTokens: "",
+    provider: null,
+    toolCalls: {},
     error: null,
   });
 }
@@ -164,20 +166,38 @@ describe("chatStore", () => {
     expect(s.pendingTokens).toBe("");
   });
 
+  it("startStreaming accepts an explicit conversationId and clears its tool calls", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.getState().receiveToolCall({
+      conversationId: conv.id,
+      id: "tc-pre",
+      name: "create_block",
+      args: {},
+    });
+
+    // Start streaming with the explicit id (simulates race-safe usage from ChatPanel)
+    useChatStore.getState().startStreaming(conv.id);
+
+    const { toolCalls, streaming } = useChatStore.getState();
+    expect(streaming).toBe(true);
+    expect(toolCalls[conv.id]).toEqual({});
+  });
+
   it("appendToken accumulates text in pendingTokens", () => {
     useChatStore.getState().startStreaming();
-    useChatStore.getState().appendToken("Hello ");
-    useChatStore.getState().appendToken("world");
+    useChatStore.getState().appendToken("conv-x", "Hello ");
+    useChatStore.getState().appendToken("conv-x", "world");
     expect(useChatStore.getState().pendingTokens).toBe("Hello world");
   });
 
   it("finalizeAssistantMessage appends assembled text as an assistant message", async () => {
     const conv = await useChatStore.getState().createConversation("r-1");
 
-    useChatStore.getState().startStreaming();
-    useChatStore.getState().appendToken("Good ");
-    useChatStore.getState().appendToken("morning!");
-    useChatStore.getState().finalizeAssistantMessage();
+    useChatStore.getState().startStreaming(conv.id);
+    useChatStore.getState().appendToken(conv.id, "Good ");
+    useChatStore.getState().appendToken(conv.id, "morning!");
+    useChatStore.getState().finalizeAssistantMessage(conv.id);
 
     const state = useChatStore.getState();
     expect(state.streaming).toBe(false);
@@ -189,11 +209,52 @@ describe("chatStore", () => {
     expect(assistant.content).toBe("Good morning!");
   });
 
+  it("finalizeAssistantMessage clears tool-call chips for the conversation", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.getState().receiveToolCall({
+      conversationId: conv.id,
+      id: "tc-fin",
+      name: "create_block",
+      args: {},
+    });
+    useChatStore.getState().receiveToolResult({
+      conversationId: conv.id,
+      id: "tc-fin",
+      success: true,
+      data: {},
+    });
+
+    useChatStore.getState().startStreaming(conv.id);
+    useChatStore.getState().appendToken(conv.id, "Done.");
+    useChatStore.getState().finalizeAssistantMessage(conv.id);
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]).toEqual({});
+  });
+
+  it("finalizeAssistantMessage with explicit conversationId writes to that conv even when active differs", async () => {
+    const conv1 = await useChatStore.getState().createConversation("r-1");
+    const conv2 = await useChatStore.getState().createConversation("r-1");
+    // conv2 is now active; simulate that stream was started for conv1
+    useChatStore.setState({ pendingTokens: "from conv1", streaming: true });
+
+    useChatStore.getState().finalizeAssistantMessage(conv1.id);
+
+    const state = useChatStore.getState();
+    expect(state.streaming).toBe(false);
+    // Message must land in conv1, not conv2
+    const conv1Msgs = state.messages[conv1.id];
+    const conv2Msgs = state.messages[conv2.id];
+    expect(conv1Msgs.find((m) => m.role === "assistant")).toBeDefined();
+    expect(conv2Msgs.find((m) => m.role === "assistant")).toBeUndefined();
+  });
+
   it("finalizeAssistantMessage does nothing when pendingTokens is empty", async () => {
     const conv = await useChatStore.getState().createConversation("r-1");
-    useChatStore.getState().startStreaming();
+    useChatStore.getState().startStreaming(conv.id);
     // No tokens appended
-    useChatStore.getState().finalizeAssistantMessage();
+    useChatStore.getState().finalizeAssistantMessage(conv.id);
 
     const state = useChatStore.getState();
     expect(state.streaming).toBe(false);
@@ -218,5 +279,122 @@ describe("chatStore", () => {
     useChatStore.setState({ error: "Some error" });
     useChatStore.getState().clearError();
     expect(useChatStore.getState().error).toBeNull();
+  });
+
+  // ── tool-call state ────────────────────────────────────────────────────────
+
+  it("receiveToolCall adds a pending tool call entry", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.getState().receiveToolCall({
+      conversationId: conv.id,
+      id: "tc-1",
+      name: "create_block",
+      args: { title: "Test" },
+    });
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]["tc-1"]).toMatchObject({
+      name: "create_block",
+      args: { title: "Test" },
+      status: "pending",
+      data: null,
+    });
+  });
+
+  it("receiveToolResult updates status to success", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.getState().receiveToolCall({
+      conversationId: conv.id,
+      id: "tc-2",
+      name: "update_block",
+      args: {},
+    });
+
+    useChatStore.getState().receiveToolResult({
+      conversationId: conv.id,
+      id: "tc-2",
+      success: true,
+      data: { id: "block-42" },
+    });
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]["tc-2"].status).toBe("success");
+    expect(toolCalls[conv.id]["tc-2"].data).toEqual({ id: "block-42" });
+  });
+
+  it("receiveToolResult updates status to error on failure", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.getState().receiveToolCall({
+      conversationId: conv.id,
+      id: "tc-3",
+      name: "delete_block",
+      args: {},
+    });
+
+    useChatStore.getState().receiveToolResult({
+      conversationId: conv.id,
+      id: "tc-3",
+      success: false,
+      data: { error: "Not found" },
+    });
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]["tc-3"].status).toBe("error");
+    expect(toolCalls[conv.id]["tc-3"].data).toEqual({ error: "Not found" });
+  });
+
+  it("receiveToolResult is a no-op when tool call id does not exist", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    // Should not throw
+    useChatStore.getState().receiveToolResult({
+      conversationId: conv.id,
+      id: "non-existent",
+      success: true,
+      data: {},
+    });
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]["non-existent"]).toBeUndefined();
+  });
+
+  it("startStreaming clears tool calls for the active conversation (fallback path)", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.getState().receiveToolCall({
+      conversationId: conv.id,
+      id: "tc-old",
+      name: "create_block",
+      args: {},
+    });
+
+    // No explicit id — falls back to activeConversationId
+    useChatStore.getState().startStreaming();
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]).toEqual({});
+  });
+
+  it("openConversation clears tool calls for that conversation", async () => {
+    const conv = await useChatStore.getState().createConversation("r-1");
+
+    useChatStore.setState({
+      toolCalls: {
+        [conv.id]: { "tc-stale": { name: "x", status: "success" } },
+      },
+    });
+
+    await useChatStore.getState().openConversation(conv.id);
+
+    const { toolCalls } = useChatStore.getState();
+    expect(toolCalls[conv.id]).toEqual({});
+  });
+
+  it("setProvider stores the active provider name", () => {
+    useChatStore.getState().setProvider("claude");
+    expect(useChatStore.getState().provider).toBe("claude");
   });
 });

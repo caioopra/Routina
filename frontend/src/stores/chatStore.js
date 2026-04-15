@@ -18,7 +18,13 @@ function extractError(err, fallback) {
  *   activeConversationId: string | null
  *   messages: { [conversationId]: Array<{ id, role, content, created_at }> }
  *   streaming: boolean
- *   pendingTokens: string   -- assembling the in-flight assistant message
+ *   pendingTokens: string          — assembling the in-flight assistant message
+ *   provider: string | null        — active LLM provider for current stream
+ *   toolCalls: {
+ *     [conversationId]: {
+ *       [toolCallId]: { name, args, status: 'pending'|'success'|'error', data }
+ *     }
+ *   }
  *   error: string | null
  */
 export const useChatStore = create((set, get) => ({
@@ -27,6 +33,8 @@ export const useChatStore = create((set, get) => ({
   messages: {},
   streaming: false,
   pendingTokens: "",
+  provider: null,
+  toolCalls: {},
   error: null,
 
   // ── Conversation management ──────────────────────────────────────────────
@@ -41,7 +49,11 @@ export const useChatStore = create((set, get) => ({
   },
 
   openConversation: async (id) => {
-    set({ activeConversationId: id });
+    // Clear tool calls for the newly opened conversation (fresh turn)
+    set((s) => ({
+      activeConversationId: id,
+      toolCalls: { ...s.toolCalls, [id]: {} },
+    }));
     const existing = get().messages[id];
     if (!existing) {
       try {
@@ -62,6 +74,7 @@ export const useChatStore = create((set, get) => ({
         conversations: [conv, ...s.conversations],
         activeConversationId: conv.id,
         messages: { ...s.messages, [conv.id]: [] },
+        toolCalls: { ...s.toolCalls, [conv.id]: {} },
       }));
       return conv;
     } catch (err) {
@@ -71,16 +84,6 @@ export const useChatStore = create((set, get) => ({
   },
 
   // ── Messaging ────────────────────────────────────────────────────────────
-
-  /**
-   * sendMessage — called externally with the user's text. Returns the
-   * `start` function from useSSE — callers should wire this up; the store
-   * manages optimistic message append and token accumulation.
-   *
-   * Because Zustand stores cannot use React hooks, the actual SSE invocation
-   * is performed by the ChatPanel component via `useSSE`. This action only
-   * manages the message list state transitions.
-   */
 
   appendUserMessage: (text) => {
     const id = get().activeConversationId;
@@ -99,16 +102,75 @@ export const useChatStore = create((set, get) => ({
     }));
   },
 
-  startStreaming: () => {
-    set({ streaming: true, pendingTokens: "" });
+  startStreaming: (conversationId) => {
+    // Clear tool calls for the target conversation when a new turn starts.
+    // Falls back to activeConversationId for backwards compat.
+    const id = conversationId ?? get().activeConversationId;
+    set((s) => ({
+      streaming: true,
+      pendingTokens: "",
+      provider: null,
+      toolCalls: id ? { ...s.toolCalls, [id]: {} } : s.toolCalls,
+    }));
   },
 
-  appendToken: (token) => {
+  appendToken: (conversationId, token) => {
+    // conversationId is accepted but pendingTokens is a single scalar; the
+    // caller (ChatPanel) already guards that only the originating conv writes.
     set((s) => ({ pendingTokens: s.pendingTokens + token }));
   },
 
-  finalizeAssistantMessage: () => {
-    const id = get().activeConversationId;
+  setProvider: (providerName) => {
+    set({ provider: providerName });
+  },
+
+  /**
+   * receiveToolCall — add a new tool call in 'pending' status.
+   */
+  receiveToolCall: ({ conversationId, id, name, args }) => {
+    set((s) => {
+      const convCalls = s.toolCalls[conversationId] ?? {};
+      return {
+        toolCalls: {
+          ...s.toolCalls,
+          [conversationId]: {
+            ...convCalls,
+            [id]: { name, args, status: "pending", data: null },
+          },
+        },
+      };
+    });
+  },
+
+  /**
+   * receiveToolResult — update an existing tool call with its result.
+   */
+  receiveToolResult: ({ conversationId, id, success, data }) => {
+    set((s) => {
+      const convCalls = s.toolCalls[conversationId] ?? {};
+      const existing = convCalls[id];
+      if (!existing) return s;
+      return {
+        toolCalls: {
+          ...s.toolCalls,
+          [conversationId]: {
+            ...convCalls,
+            [id]: {
+              ...existing,
+              status: success ? "success" : "error",
+              data: data ?? null,
+            },
+          },
+        },
+      };
+    });
+  },
+
+  finalizeAssistantMessage: (conversationId) => {
+    // Use the supplied conversationId to avoid a race when the user switches
+    // conversations while a stream is in flight.  Falls back to
+    // activeConversationId for backwards compat.
+    const id = conversationId ?? get().activeConversationId;
     const { pendingTokens } = get();
     if (!id || !pendingTokens) {
       set({ streaming: false, pendingTokens: "" });
@@ -123,6 +185,8 @@ export const useChatStore = create((set, get) => ({
     set((s) => ({
       streaming: false,
       pendingTokens: "",
+      // Clear stale chips for this conversation once the turn is done.
+      toolCalls: { ...s.toolCalls, [id]: {} },
       messages: {
         ...s.messages,
         [id]: [...(s.messages[id] ?? []), assistantMsg],

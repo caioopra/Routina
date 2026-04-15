@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "../../stores/chatStore";
+import { useAuthStore } from "../../stores/authStore";
+import { useBlockStore } from "../../stores/blockStore";
+import { useRuleStore } from "../../stores/ruleStore";
 import { useSSE } from "../../hooks/useSSE";
 import Message from "./Message";
 import Composer from "./Composer";
 import ConversationList from "./ConversationList";
 import PlannerContextEditor from "./PlannerContextEditor";
+import ProviderToggle from "./ProviderToggle";
+import ToolCallChip from "./ToolCallChip";
 
 /**
  * ChatPanel — full chat UI embedded in the routine detail page.
@@ -19,6 +24,7 @@ export default function ChatPanel({ routineId, onClose }) {
   const messages = useChatStore((s) => s.messages);
   const streaming = useChatStore((s) => s.streaming);
   const pendingTokens = useChatStore((s) => s.pendingTokens);
+  const toolCalls = useChatStore((s) => s.toolCalls);
   const error = useChatStore((s) => s.error);
 
   const loadConversations = useChatStore((s) => s.loadConversations);
@@ -27,11 +33,16 @@ export default function ChatPanel({ routineId, onClose }) {
   const appendUserMessage = useChatStore((s) => s.appendUserMessage);
   const startStreaming = useChatStore((s) => s.startStreaming);
   const appendToken = useChatStore((s) => s.appendToken);
+  const setProvider = useChatStore((s) => s.setProvider);
+  const receiveToolCall = useChatStore((s) => s.receiveToolCall);
+  const receiveToolResult = useChatStore((s) => s.receiveToolResult);
   const finalizeAssistantMessage = useChatStore(
     (s) => s.finalizeAssistantMessage,
   );
   const setStreamingError = useChatStore((s) => s.setStreamingError);
   const clearError = useChatStore((s) => s.clearError);
+
+  const loadProviders = useAuthStore((s) => s.loadProviders);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [contextEditorOpen, setContextEditorOpen] = useState(false);
@@ -45,13 +56,18 @@ export default function ChatPanel({ routineId, onClose }) {
     loadConversations();
   }, [loadConversations]);
 
+  // Load providers on first open
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
+
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     const el = messageListRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, pendingTokens]);
+  }, [messages, pendingTokens, toolCalls]);
 
   async function handleNewConversation() {
     try {
@@ -80,7 +96,9 @@ export default function ChatPanel({ routineId, onClose }) {
 
     // Optimistic user message
     appendUserMessage(text);
-    startStreaming();
+    // Capture the conversation id *now* so every SSE callback below closes over
+    // the correct value even if the user switches conversations mid-stream.
+    startStreaming(convId);
 
     startSSE(
       {
@@ -92,29 +110,63 @@ export default function ChatPanel({ routineId, onClose }) {
         onEvent(eventType, data) {
           if (eventType === "token") {
             const tokenText =
-              typeof data === "string" ? data : (data?.data ?? "");
-            appendToken(tokenText);
+              typeof data === "string"
+                ? data
+                : (data?.data ?? data?.text ?? "");
+            appendToken(convId, tokenText);
+          } else if (eventType === "provider") {
+            setProvider(data?.name ?? data);
+          } else if (eventType === "tool_call") {
+            receiveToolCall({
+              conversationId: convId,
+              id: data.id,
+              name: data.name,
+              args: data.args ?? {},
+            });
+          } else if (eventType === "tool_result") {
+            receiveToolResult({
+              conversationId: convId,
+              id: data.id,
+              success: data.success,
+              data: data.data ?? null,
+            });
+          } else if (eventType === "routine_updated") {
+            const updatedRoutineId = data?.routine_id;
+            if (updatedRoutineId && updatedRoutineId === routineId) {
+              useBlockStore.getState().fetchByRoutine(updatedRoutineId);
+              useRuleStore.getState().fetchByRoutine(updatedRoutineId);
+            }
+          } else if (eventType === "error") {
+            const msg =
+              typeof data === "string"
+                ? data
+                : (data?.message ?? "Stream error");
+            setStreamingError(msg);
           }
         },
         onDone() {
-          finalizeAssistantMessage();
+          finalizeAssistantMessage(convId);
         },
       },
     );
-
-    // Handle SSE-level error: the hook will set status='error', but we also
-    // want the store to finalize gracefully.
   }
 
   const activeMessages = activeConversationId
     ? (messages[activeConversationId] ?? [])
     : [];
 
+  const activeToolCalls = activeConversationId
+    ? (toolCalls[activeConversationId] ?? {})
+    : {};
+
   // Conversations filtered for this routine (backend will only return owned ones,
   // but we keep all since the store is per-user)
   const routineConversations = conversations.filter(
     (c) => !routineId || c.routine_id === routineId,
   );
+
+  // Sorted tool call entries for the current turn
+  const toolCallEntries = Object.entries(activeToolCalls);
 
   return (
     <>
@@ -159,6 +211,7 @@ export default function ChatPanel({ routineId, onClose }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <ProviderToggle />
             <button
               type="button"
               onClick={() => setContextEditorOpen(true)}
@@ -240,6 +293,27 @@ export default function ChatPanel({ routineId, onClose }) {
               {activeMessages.map((msg) => (
                 <Message key={msg.id} role={msg.role} content={msg.content} />
               ))}
+
+              {/* Tool call chips rendered during/after streaming */}
+              {toolCallEntries.length > 0 && (
+                <div
+                  className="flex justify-start mb-2 pl-8"
+                  data-testid="tool-calls-container"
+                >
+                  <div className="flex flex-col gap-1 w-full max-w-[80%]">
+                    {toolCallEntries.map(([id, tc]) => (
+                      <ToolCallChip
+                        key={id}
+                        id={id}
+                        name={tc.name}
+                        args={tc.args}
+                        status={tc.status}
+                        data={tc.data}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Streaming assistant message */}
               {streaming && pendingTokens && (

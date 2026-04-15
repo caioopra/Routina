@@ -22,6 +22,8 @@ let conversationCounter = 0;
 let chatMessages = [];
 let chatMessageCounter = 0;
 
+let providersState = { available: ["gemini", "claude"], selected: "gemini" };
+
 export function seedRoutines(initial) {
   routines = initial.map((r) => ({ ...r }));
   routineCounter = routines.length;
@@ -76,6 +78,7 @@ export function resetMockState() {
   conversationCounter = 0;
   chatMessages = [];
   chatMessageCounter = 0;
+  providersState = { available: ["gemini", "claude"], selected: "gemini" };
 }
 
 function requireAuth(request) {
@@ -501,6 +504,7 @@ export const handlers = [
     // Persist user message
     chatMessageCounter += 1;
     const convId = body.conversation_id;
+    const routineId = body.routine_id ?? "routine-1";
     if (convId) {
       chatMessages.push({
         id: `msg-${chatMessageCounter}`,
@@ -511,24 +515,92 @@ export const handlers = [
       });
     }
 
-    // Build a short scripted reply
-    const replyTokens = [
-      "Sure! ",
-      "I can help you ",
-      "with that routine. ",
-      "Let me know what changes ",
-      "you would like to make.",
-    ];
+    // Detect whether the message should trigger a tool-call sequence.
+    // Keywords: "create a block", "create block", "add a block" → create_block tool call.
+    const lowerText = userText.toLowerCase();
+    const triggerToolCall =
+      lowerText.includes("create a block") ||
+      lowerText.includes("create block") ||
+      lowerText.includes("add a block") ||
+      lowerText.includes("add block");
 
-    // Build the full SSE body as a string
     const lines = [];
+
+    // provider event
     lines.push(
       "event: provider\ndata: " + JSON.stringify({ name: "gemini" }) + "\n",
     );
-    for (const t of replyTokens) {
-      lines.push("event: token\ndata: " + JSON.stringify(t) + "\n");
+
+    if (triggerToolCall) {
+      // tokens → tool_call → tool_result → routine_updated → tokens → done
+      const beforeTokens = ["Sure! ", "Let me create that block for you. "];
+      for (const t of beforeTokens) {
+        lines.push("event: token\ndata: " + JSON.stringify(t) + "\n");
+      }
+
+      const toolCallId = "tc-mock-1";
+      const toolCallArgs = {
+        routine_id: routineId,
+        title: "Morning Block",
+        day_of_week: 1,
+        start_time: "07:00",
+        end_time: "08:00",
+        type: "trabalho",
+      };
+
+      lines.push(
+        "event: tool_call\ndata: " +
+          JSON.stringify({
+            id: toolCallId,
+            name: "create_block",
+            args: toolCallArgs,
+          }) +
+          "\n",
+      );
+
+      lines.push(
+        "event: tool_result\ndata: " +
+          JSON.stringify({
+            id: toolCallId,
+            success: true,
+            data: { id: "block-mock-1", ...toolCallArgs },
+          }) +
+          "\n",
+      );
+
+      lines.push(
+        "event: routine_updated\ndata: " +
+          JSON.stringify({ routine_id: routineId }) +
+          "\n",
+      );
+
+      const afterTokens = ["Done! ", "The block has been added."];
+      for (const t of afterTokens) {
+        lines.push("event: token\ndata: " + JSON.stringify(t) + "\n");
+      }
+    } else {
+      // Plain reply without tool calls
+      const replyTokens = [
+        "Sure! ",
+        "I can help you ",
+        "with that routine. ",
+        "Let me know what changes ",
+        "you would like to make.",
+      ];
+      for (const t of replyTokens) {
+        lines.push("event: token\ndata: " + JSON.stringify(t) + "\n");
+      }
     }
-    lines.push("event: done\ndata: {}\n");
+
+    lines.push(
+      "event: done\ndata: " +
+        JSON.stringify({
+          conversation_id: convId,
+          message_id: `msg-${chatMessageCounter}`,
+        }) +
+        "\n",
+    );
+
     const sseBody = lines.join("\n") + "\n";
 
     // Persist assistant message
@@ -538,7 +610,9 @@ export const handlers = [
         id: `msg-${chatMessageCounter}`,
         conversation_id: convId,
         role: "assistant",
-        content: replyTokens.join(""),
+        content: triggerToolCall
+          ? "Sure! Let me create that block for you. Done! The block has been added."
+          : "Sure! I can help you with that routine. Let me know what changes you would like to make.",
         created_at: new Date().toISOString(),
       });
     }
@@ -550,6 +624,28 @@ export const handlers = [
         "Cache-Control": "no-cache",
       },
     });
+  }),
+
+  // ── Settings / providers ──
+
+  http.get("/api/settings/providers", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return HttpResponse.json(providersState);
+  }),
+
+  http.post("/api/settings/llm-provider", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const body = (await request.json()) || {};
+    const { provider } = body;
+    if (!provider || !providersState.available.includes(provider)) {
+      return HttpResponse.json({ error: "Invalid provider" }, { status: 422 });
+    }
+    providersState = { ...providersState, selected: provider };
+    return HttpResponse.json(providersState);
   }),
 
   // ── Me / planner-context ──

@@ -4,6 +4,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import ChatPanel from "./ChatPanel";
 import { useChatStore } from "../../stores/chatStore";
 import { useAuthStore } from "../../stores/authStore";
+import { useBlockStore } from "../../stores/blockStore";
+import { useRuleStore } from "../../stores/ruleStore";
 import { resetMockState } from "../../test/mocks/handlers";
 
 function resetStore() {
@@ -13,6 +15,8 @@ function resetStore() {
     messages: {},
     streaming: false,
     pendingTokens: "",
+    provider: null,
+    toolCalls: {},
     error: null,
   });
 }
@@ -170,5 +174,73 @@ describe("ChatPanel", () => {
     await waitFor(() => {
       expect(useChatStore.getState().activeConversationId).not.toBeNull();
     });
+  });
+
+  it("tool-call SSE path completes and assistant message contains the result", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const input = screen.getByRole("textbox", { name: /message input/i });
+    await user.type(input, "create a block for me");
+    await user.keyboard("{Enter}");
+
+    // The mock emits tool_call + tool_result then finishes the stream.
+    // After finalization, the assembled assistant message must be visible and
+    // tool-call chips must be cleared (stale-chip-on-reopen fix).
+    await waitFor(
+      () => {
+        expect(
+          screen.getByText(/the block has been added/i),
+        ).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
+
+    // Chips are cleared after finalization — none should remain in the DOM.
+    expect(screen.queryByText("Created a block")).not.toBeInTheDocument();
+    // Store must also reflect the cleared state.
+    const convId = useChatStore.getState().activeConversationId;
+    expect(useChatStore.getState().toolCalls[convId]).toEqual({});
+  });
+
+  it("routine_updated triggers fetchByRoutine on blockStore and ruleStore", async () => {
+    const user = userEvent.setup();
+
+    const fetchBlocks = vi
+      .spyOn(useBlockStore.getState(), "fetchByRoutine")
+      .mockResolvedValue(undefined);
+    const fetchRules = vi
+      .spyOn(useRuleStore.getState(), "fetchByRoutine")
+      .mockResolvedValue(undefined);
+
+    renderPanel("routine-1");
+
+    const input = screen.getByRole("textbox", { name: /message input/i });
+    await user.type(input, "create a block for me");
+    await user.keyboard("{Enter}");
+
+    await waitFor(
+      () => {
+        expect(fetchBlocks).toHaveBeenCalledWith("routine-1");
+        expect(fetchRules).toHaveBeenCalledWith("routine-1");
+      },
+      { timeout: 3000 },
+    );
+
+    fetchBlocks.mockRestore();
+    fetchRules.mockRestore();
+  });
+
+  it("renders ProviderToggle in header when providers are loaded", () => {
+    useAuthStore.setState({
+      providers: { available: ["gemini", "claude"], selected: "gemini" },
+    });
+    renderPanel();
+
+    expect(
+      screen.getByRole("group", { name: /llm provider/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /gemini/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /claude/i })).toBeInTheDocument();
   });
 });
