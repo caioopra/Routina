@@ -43,24 +43,23 @@ export default function Composer({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         disabled={disabled}
-        rows={1}
+        rows={2}
         aria-label="Message input"
-        className="flex-1 resize-none rounded-xl px-3 py-2.5 text-sm leading-relaxed outline-none focus:ring-1 transition-all"
+        className="flex-1 resize-none rounded-xl px-4 py-3 text-base leading-relaxed outline-none focus:ring-2 transition-all placeholder:text-[#7a7498]"
         style={{
           background: "#0f0c1a",
-          color: "#e2e0f0",
-          border: "1px solid rgba(139,92,246,0.2)",
+          color: "#f1eff8",
+          border: "1px solid rgba(139,92,246,0.25)",
           fontFamily: "'DM Sans', sans-serif",
-          minHeight: 40,
-          maxHeight: 120,
+          minHeight: 64,
+          maxHeight: 240,
           overflowY: "auto",
-          "--tw-ring-color": "rgba(139,92,246,0.4)",
+          "--tw-ring-color": "rgba(139,92,246,0.45)",
           opacity: disabled ? 0.5 : 1,
         }}
         onInput={(e) => {
-          // Auto-resize
           e.target.style.height = "auto";
-          e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+          e.target.style.height = `${Math.min(e.target.scrollHeight, 240)}px`;
         }}
       />
       <button

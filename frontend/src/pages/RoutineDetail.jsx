@@ -32,7 +32,7 @@ const DAY_NAMES = [
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 // Tabs for the side panel
-const TABS = ["Rules", "Labels", "Chat"];
+const TABS = ["Rules", "Labels"];
 
 export default function RoutineDetail() {
   const { id } = useParams();
@@ -67,6 +67,7 @@ export default function RoutineDetail() {
   const [selectedDay, setSelectedDay] = useState(0); // for mobile
   const [confirmDeleteBlockId, setConfirmDeleteBlockId] = useState(null);
   const [confirmDeleteRuleId, setConfirmDeleteRuleId] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   // Derive routine from store (may not be loaded yet)
   const routine = routines.find((r) => r.id === id);
@@ -398,12 +399,6 @@ export default function RoutineDetail() {
             </div>
           )}
 
-          {activeTab === "Chat" && (
-            <div style={{ height: 520 }}>
-              <ChatPanel routineId={id} />
-            </div>
-          )}
-
           {ruleSlice.error && activeTab === "Rules" && (
             <div
               role="alert"
@@ -427,6 +422,60 @@ export default function RoutineDetail() {
         defaultDay={modalDay}
         labels={labels}
       />
+
+      {/* Chat drawer + FAB */}
+      {!chatOpen && (
+        <button
+          type="button"
+          onClick={() => setChatOpen(true)}
+          aria-label="Open AI chat"
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full px-5 py-3 shadow-2xl transition-transform hover:scale-105"
+          style={{
+            background: "linear-gradient(135deg, #7c3aed, #8b5cf6)",
+            color: "#fff",
+            fontFamily: "'DM Sans', sans-serif",
+            fontWeight: 600,
+            fontSize: 14,
+            boxShadow:
+              "0 12px 32px rgba(139,92,246,0.35), 0 0 0 1px rgba(139,92,246,0.4)",
+          }}
+        >
+          <span style={{ fontSize: 18, lineHeight: 1 }}>✦</span>
+          AI Chat
+        </button>
+      )}
+
+      {chatOpen && (
+        <>
+          <button
+            type="button"
+            onClick={() => setChatOpen(false)}
+            aria-label="Close chat overlay"
+            className="fixed inset-0 z-40"
+            style={{
+              background: "rgba(8,6,15,0.55)",
+              backdropFilter: "blur(2px)",
+            }}
+          />
+          <div
+            role="dialog"
+            aria-label="AI chat"
+            className="fixed z-50 flex flex-col"
+            style={{
+              right: 24,
+              top: 24,
+              bottom: 24,
+              width: "min(560px, calc(100vw - 48px))",
+              boxShadow:
+                "0 24px 64px rgba(0,0,0,0.5), 0 0 0 1px rgba(139,92,246,0.25)",
+              borderRadius: 20,
+              overflow: "hidden",
+            }}
+          >
+            <ChatPanel routineId={id} onClose={() => setChatOpen(false)} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
