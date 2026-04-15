@@ -196,6 +196,40 @@ Weekly hour distribution summary.
 
 **Indexes:** `(routine_id)`
 
+### `routine_actions`
+Audit log for every LLM tool-driven routine mutation. Written by the ToolExecutor on each `create_block`, `update_block`, `delete_block`, `create_rule`, `update_rule`, or `delete_rule` call. Read-only tool calls (e.g. `get_routine`) are not logged here.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | `gen_random_uuid()` |
+| user_id | UUID FK→users CASCADE | Owner; used for authorization checks |
+| routine_id | UUID FK→routines CASCADE | The routine being mutated |
+| conversation_id | UUID FK→conversations SET NULL | Nullable — rows survive conversation deletion |
+| action_type | TEXT | CHECK: `'create_block'`, `'update_block'`, `'delete_block'`, `'create_rule'`, `'update_rule'`, `'delete_rule'` |
+| target_id | UUID | The id of the block or rule that was mutated |
+| payload_before | JSONB | Full row snapshot before mutation; NULL for create operations |
+| payload_after | JSONB | Full row snapshot after mutation; NULL for delete operations |
+| created_at | TIMESTAMPTZ | When the action was executed |
+| undone_at | TIMESTAMPTZ | NULL until reversed by `undo_last_action`; never hard-deleted |
+
+**Indexes:**
+- `(conversation_id, created_at DESC) WHERE undone_at IS NULL` — primary undo query (partial index stays small)
+- `(routine_id, created_at DESC)` — per-routine history / admin queries
+- `(user_id)` — ownership checks
+
+#### Undo model
+
+Every tool-driven mutation writes one `routine_actions` row with `payload_before` and `payload_after` holding full JSONB snapshots of the affected row. When the user calls `undo_last_action` the backend:
+
+1. Finds the newest row where `conversation_id = $1 AND undone_at IS NULL` (hits the partial index).
+2. Reverses the mutation symmetrically:
+   - `create_*` — deletes the row identified by `payload_after.id`.
+   - `update_*` — writes `payload_before` back to the row identified by `target_id`.
+   - `delete_*` — re-inserts `payload_before` (restores the deleted row).
+3. Stamps `undone_at = now()` on the audit row rather than deleting it, preserving the full history.
+
+Scoping undo to `conversation_id` prevents an `undo` in a new chat session from accidentally reversing an action taken in an older session.
+
 ## Relationships Diagram
 
 ```
@@ -206,5 +240,7 @@ users ──┬── routines ──┬── blocks ──┬── subtasks
         ├── labels
         ├── goals (self-referencing via parent_id)
         ├── events
-        └── conversations ── messages
+        ├── conversations ── messages
+        └── routine_actions ──┬── routines
+                              └── conversations (nullable)
 ```
