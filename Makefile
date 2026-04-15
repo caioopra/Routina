@@ -1,4 +1,4 @@
-.PHONY: help install db-up db-down db-reset migrate backend frontend dev test test-backend test-frontend lint build clean deploy
+.PHONY: help install db-up db-down db-reset migrate prepare backend frontend dev test test-backend test-frontend lint build clean deploy
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ db-reset: ## Drop, recreate, and migrate the database
 
 migrate: ## Apply pending migrations
 	cd backend && cargo sqlx migrate run
+
+prepare: ## Regenerate sqlx offline query metadata (.sqlx/); run after changing any sqlx::query! macro
+	cd backend && cargo sqlx prepare --workspace -- --all-targets
 
 backend: ## Run the Rust/Axum backend (localhost:3000)
 	cd backend && cargo run

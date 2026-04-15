@@ -18,6 +18,33 @@ if [ -n "$RUST_STAGED" ]; then
   fi
 fi
 
+# --- sqlx offline metadata drift ---
+# If any staged Rust file touches a sqlx::query!/query_as! macro, ensure the
+# committed .sqlx/ metadata still matches the code. Requires a reachable DB
+# (DATABASE_URL); if the DB is unreachable we skip with a warning rather than
+# block the commit.
+if [ -n "$RUST_STAGED" ]; then
+  SQLX_STAGED=$(git diff --cached --diff-filter=ACM -U0 -- '*.rs' | grep -E '^\+.*sqlx::query' || true)
+  if [ -n "$SQLX_STAGED" ]; then
+    echo "Checking sqlx offline metadata..."
+    if (cd "$REPO_ROOT/backend" && cargo sqlx prepare --workspace --check -- --all-targets 2>/dev/null) ; then
+      :
+    else
+      # Probe whether the failure is a real drift or a missing DB/tool.
+      if ! command -v cargo >/dev/null 2>&1 || ! cargo sqlx --version >/dev/null 2>&1 ; then
+        echo "  (skipped: sqlx-cli not installed; run 'cargo install sqlx-cli')"
+      elif [ -z "${DATABASE_URL:-}" ] ; then
+        echo "  (skipped: DATABASE_URL not set)"
+      else
+        echo ""
+        echo "sqlx offline metadata (.sqlx/) is out of date."
+        echo "Run 'make prepare' and stage the updated backend/.sqlx/ files."
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 # --- Frontend formatting ---
 JS_STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.js' '*.jsx' '*.ts' '*.tsx' '*.css' '*.json' | grep '^frontend/' || true)
 if [ -n "$JS_STAGED" ]; then
