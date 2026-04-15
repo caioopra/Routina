@@ -10,8 +10,12 @@ use crate::ai::provider::LlmProvider;
 use crate::config::Config;
 use crate::middleware::auth::auth_middleware;
 use crate::middleware::error::AppError;
-use crate::middleware::rate_limit::{RateLimitState, rate_limit_middleware};
+use crate::middleware::rate_limit::{
+    EmailRateLimitState, LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS, RateLimitState,
+    rate_limit_middleware,
+};
 
+pub mod admin;
 pub mod auth;
 pub mod blocks;
 pub mod chat;
@@ -43,6 +47,7 @@ pub fn create_router_with_rate_limit(
         config,
         providers,
         rate_limit: RateLimitState::new(chat_rate_limit),
+        login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
     };
 
     let chat_router =
@@ -61,12 +66,16 @@ pub fn create_router_with_rate_limit(
         .nest("/settings", settings::router())
         .layer(from_fn_with_state(state.clone(), auth_middleware));
 
+    let admin = Router::new()
+        .nest("/admin", admin::router())
+        .layer(from_fn_with_state(state.clone(), auth_middleware));
+
     let public = Router::new()
         .nest("/health", health::router())
         .nest("/auth", auth::router());
 
     Router::new()
-        .nest("/api", public.merge(protected))
+        .nest("/api", public.merge(protected).merge(admin))
         .with_state(state)
 }
 
@@ -92,6 +101,7 @@ pub fn create_router_with_providers(
         config,
         providers,
         rate_limit: RateLimitState::new(CHAT_RATE_LIMIT),
+        login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
     };
 
     // Chat route with per-user rate limiting layered on top.
@@ -122,13 +132,19 @@ pub fn create_router_with_providers(
         .nest("/settings", settings::router())
         .layer(from_fn_with_state(state.clone(), auth_middleware));
 
+    // Admin sub-router: auth_middleware blocks unauthenticated callers before
+    // they reach the AdminUser extractor, which then checks the role.
+    let admin = Router::new()
+        .nest("/admin", admin::router())
+        .layer(from_fn_with_state(state.clone(), auth_middleware));
+
     // Public sub-router: no auth required.
     let public = Router::new()
         .nest("/health", health::router())
         .nest("/auth", auth::router());
 
     Router::new()
-        .nest("/api", public.merge(protected))
+        .nest("/api", public.merge(protected).merge(admin))
         .with_state(state)
 }
 
@@ -142,8 +158,11 @@ pub struct AppState {
     /// provider from `users.preferences` and falls back to the first available
     /// if the selection is unavailable.
     pub providers: HashMap<String, Arc<dyn LlmProvider>>,
-    /// Per-user sliding-window rate limiter shared across the process lifetime.
+    /// Per-user sliding-window rate limiter for the chat endpoint.
     pub rate_limit: RateLimitState,
+    /// Per-email sliding-window rate limiter for the login endpoint.
+    /// Keyed on the normalized (lowercase, trimmed) email address.
+    pub login_rate_limit: EmailRateLimitState,
 }
 
 impl AppState {
