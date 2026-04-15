@@ -95,7 +95,32 @@ preferências ao sugerir mudanças.
    prosseguir e peça confirmação.
 
 5. Mantenha respostas objetivas. Use listas quando listar múltiplos blocos ou
-   mudanças. Evite textos longos sem ação.{user_context_section}"#,
+   mudanças. Evite textos longos sem ação.
+
+## Regras de uso de ferramentas
+
+Você tem acesso a um conjunto de ferramentas que modificam a rotina diretamente.
+As regras abaixo são obrigatórias:
+
+1. **Mutações são imediatas.** Toda chamada de ferramenta bem-sucedida altera o
+   banco de dados na hora. Após executar uma ferramenta, sempre resuma em PT-BR
+   o que foi feito (ex.: "Criei o bloco 'Academia' na segunda-feira às 07:00.").
+
+2. **Para desfazer, use `undo_last_action`.** Se o usuário pedir para desfazer,
+   cancelar ou "desfazer" a última ação, chame `undo_last_action` imediatamente.
+   Nunca tente reverter manualmente construindo chamadas opostas (ex.: não delete
+   um bloco recém-criado "na mão" — use o undo).
+
+3. **Nunca invente IDs.** Antes de atualizar ou deletar um bloco ou regra,
+   chame `list_blocks` ou `list_rules` para obter os IDs reais do banco.
+   Jamais referencie a rotina de outro usuário.
+
+4. **Prefira sequências em lote.** Quando uma solicitação do usuário exigir
+   múltiplas mutações, faça todas as chamadas de ferramenta necessárias em
+   sequência dentro da mesma resposta; evite perguntar ao usuário entre cada passo.
+
+5. **A lista de ferramentas disponíveis** (nomes e parâmetros) já é enviada pela
+   API; não há necessidade de listá-las neste prompt.{user_context_section}"#,
         user_name = user.name,
         routine_name = routine.name,
         period = period,
@@ -269,5 +294,97 @@ mod tests {
         let routine = make_routine("Rotina Simples", None);
         let prompt = planner_system_prompt(&make_user("Caio", None), &routine);
         assert!(prompt.contains("sem período definido"));
+    }
+
+    // ---- Tool-use section tests (Slice C) -----------------------------------
+
+    #[test]
+    fn prompt_contains_tool_use_section() {
+        let prompt = default_prompt();
+        assert!(
+            prompt.contains("## Regras de uso de ferramentas"),
+            "prompt must contain the tool-use rules section header"
+        );
+    }
+
+    #[test]
+    fn prompt_tool_use_section_contains_ferramentas_keyword() {
+        let prompt = default_prompt();
+        assert!(
+            prompt.contains("ferramentas"),
+            "prompt tool-use section must contain 'ferramentas'"
+        );
+    }
+
+    #[test]
+    fn prompt_tool_use_section_contains_desfazer_keyword() {
+        let prompt = default_prompt();
+        assert!(
+            prompt.contains("desfazer"),
+            "prompt tool-use section must contain 'desfazer'"
+        );
+    }
+
+    #[test]
+    fn prompt_tool_use_section_mentions_undo_last_action() {
+        let prompt = default_prompt();
+        assert!(
+            prompt.contains("undo_last_action"),
+            "prompt must mention 'undo_last_action' tool in PT-BR instructions"
+        );
+    }
+
+    #[test]
+    fn prompt_tool_use_mutations_are_immediate() {
+        let prompt = default_prompt();
+        // The prompt must tell the LLM that mutations are immediate.
+        assert!(
+            prompt.contains("imediatas") || prompt.contains("imediata"),
+            "prompt must declare that mutations are immediate"
+        );
+    }
+
+    #[test]
+    fn prompt_tool_use_no_manual_reverse() {
+        let prompt = default_prompt();
+        // The prompt must forbid manually reversing mutations.
+        assert!(
+            prompt.contains("manualmente"),
+            "prompt must warn against manually reversing mutations"
+        );
+    }
+
+    #[test]
+    fn prompt_tool_use_batch_preference() {
+        let prompt = default_prompt();
+        // The prompt must advise batching multiple tool calls.
+        assert!(
+            prompt.contains("lote") || prompt.contains("sequência"),
+            "prompt must mention batching/sequence preference"
+        );
+    }
+
+    #[test]
+    fn prompt_routine_name_still_appears_after_tool_section_added() {
+        let routine = make_routine("Rotina de Inverno", Some("2026.2"));
+        let prompt = planner_system_prompt(&make_user("Caio", None), &routine);
+        assert!(
+            prompt.contains("Rotina de Inverno"),
+            "routine name must still appear in prompt after adding tool-use section"
+        );
+    }
+
+    #[test]
+    fn prompt_length_under_1500_tokens_approx_with_tool_section() {
+        // The tool-use section adds ~300 tokens; 1500-token ceiling is generous.
+        // We keep the original 900-token test for the base prompt (no context),
+        // but add this separate one to confirm the ceiling is still reasonable.
+        let prompt = default_prompt();
+        let estimated_tokens = prompt.len() / 4;
+        assert!(
+            estimated_tokens < 1500,
+            "Prompt with tool section is too long: ~{estimated_tokens} tokens (limit 1500). len={}",
+            prompt.len()
+        );
     }
 }
