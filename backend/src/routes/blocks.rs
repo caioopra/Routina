@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::http::StatusCode;
 use axum::{
     Json, Router,
@@ -13,7 +15,18 @@ use crate::middleware::error::AppError;
 use crate::models::block::{Block, BlockResponse, CreateBlockRequest, UpdateBlockRequest};
 use crate::models::label::LabelResponse;
 
-use super::AppState;
+use super::{AppState, validate_length, verify_routine_owned};
+
+/// Allowed values for the `type` column.
+const BLOCK_TYPES: &[&str] = &[
+    "trabalho",
+    "mestrado",
+    "aula",
+    "exercicio",
+    "slides",
+    "viagem",
+    "livre",
+];
 
 /// Sub-router for `/routines/:routine_id/blocks` (GET + POST).
 pub fn nested_router() -> Router<AppState> {
@@ -38,7 +51,7 @@ async fn list_blocks(
     Path(routine_id): Path<Uuid>,
     Query(filter): Query<DayFilter>,
 ) -> Result<Json<Vec<BlockResponse>>, AppError> {
-    verify_routine_owned(&state, user.id, routine_id).await?;
+    verify_routine_owned(&state.pool, user.id, routine_id).await?;
 
     // Validate optional day filter.
     if let Some(day) = filter.day
@@ -68,18 +81,14 @@ async fn list_blocks(
         .await?
     };
 
-    // Collect labels for all blocks in a single query.
+    // Collect labels for all blocks in a single query — O(1) lookup per block.
     let block_ids: Vec<Uuid> = blocks.iter().map(|b| b.id).collect();
-    let labels_map = fetch_labels_for_blocks(&state, &block_ids).await?;
+    let mut labels_map = fetch_labels_for_blocks(&state, &block_ids, user.id).await?;
 
     let responses = blocks
         .into_iter()
         .map(|b| {
-            let labels = labels_map
-                .iter()
-                .filter(|(bid, _)| *bid == b.id)
-                .map(|(_, l)| l.clone())
-                .collect();
+            let labels = labels_map.remove(&b.id).unwrap_or_default();
             BlockResponse::from_block(b, labels)
         })
         .collect();
@@ -93,18 +102,17 @@ async fn create_block(
     Path(routine_id): Path<Uuid>,
     Json(body): Json<CreateBlockRequest>,
 ) -> Result<(StatusCode, Json<BlockResponse>), AppError> {
-    verify_routine_owned(&state, user.id, routine_id).await?;
+    verify_routine_owned(&state.pool, user.id, routine_id).await?;
 
-    validate_block_fields(
+    let (start, end) = validate_block_fields(
         body.day_of_week,
         &body.start_time,
         body.end_time.as_deref(),
         &body.title,
+        body.note.as_deref(),
         &body.block_type,
     )?;
 
-    let start = parse_time(&body.start_time)?;
-    let end = body.end_time.as_deref().map(parse_time).transpose()?;
     let sort_order = body.sort_order.unwrap_or(0);
     let id = Uuid::now_v7();
 
@@ -146,26 +154,36 @@ async fn update_block(
             "day_of_week must be between 0 and 6".into(),
         ));
     }
-    if let Some(ref title) = body.title
-        && title.trim().is_empty()
+    if let Some(ref title) = body.title {
+        if title.trim().is_empty() {
+            return Err(AppError::Validation("title cannot be empty".into()));
+        }
+        validate_length("title", title, 200)?;
+    }
+    if let Some(ref note) = body.note {
+        validate_length("note", note, 2000)?;
+    }
+    if let Some(ref t) = body.block_type
+        && !BLOCK_TYPES.contains(&t.as_str())
     {
-        return Err(AppError::Validation("title cannot be empty".into()));
-    }
-    if let Some(ref t) = body.start_time {
-        parse_time(t)?;
-    }
-    if let Some(ref t) = body.end_time {
-        parse_time(t)?;
+        return Err(AppError::Validation(format!(
+            "unknown block type '{t}'; allowed: {}",
+            BLOCK_TYPES.join(", ")
+        )));
     }
 
-    let start_time = body
-        .start_time
-        .as_deref()
-        .map(|t| NaiveTime::parse_from_str(t, "%H:%M").expect("already validated"));
-    let end_time = body
-        .end_time
-        .as_deref()
-        .map(|t| NaiveTime::parse_from_str(t, "%H:%M").expect("already validated"));
+    // Parse times exactly once; use those parsed values in the SQL binding.
+    let start_time = body.start_time.as_deref().map(parse_time).transpose()?;
+    let end_time = body.end_time.as_deref().map(parse_time).transpose()?;
+
+    // If both are provided in this update, enforce ordering.
+    if let (Some(start), Some(end)) = (start_time, end_time)
+        && end <= start
+    {
+        return Err(AppError::Validation(
+            "end_time must be strictly after start_time".into(),
+        ));
+    }
 
     let updated = sqlx::query_as::<_, Block>(&format!(
         "UPDATE blocks SET \
@@ -195,8 +213,8 @@ async fn update_block(
     .ok_or(AppError::NotFound)?;
 
     // Re-fetch labels for this block.
-    let labels_map = fetch_labels_for_blocks(&state, &[updated.id]).await?;
-    let labels = labels_map.into_iter().map(|(_, l)| l).collect();
+    let mut labels_map = fetch_labels_for_blocks(&state, &[updated.id], user.id).await?;
+    let labels = labels_map.remove(&updated.id).unwrap_or_default();
 
     Ok(Json(BlockResponse::from_block(updated, labels)))
 }
@@ -230,13 +248,17 @@ fn parse_time(s: &str) -> Result<NaiveTime, AppError> {
         .map_err(|_| AppError::Validation(format!("invalid time format '{s}', expected HH:MM")))
 }
 
+/// Validates a full block creation payload and returns the parsed `(start, Option<end>)` times.
+/// All validation for create-time fields lives here; callers bind the returned
+/// `NaiveTime` values directly, eliminating any chance of a re-parse mismatch.
 fn validate_block_fields(
     day_of_week: i16,
     start_time: &str,
     end_time: Option<&str>,
     title: &str,
+    note: Option<&str>,
     block_type: &str,
-) -> Result<(), AppError> {
+) -> Result<(NaiveTime, Option<NaiveTime>), AppError> {
     if !(0..=6).contains(&day_of_week) {
         return Err(AppError::Validation(
             "day_of_week must be between 0 and 6".into(),
@@ -245,32 +267,28 @@ fn validate_block_fields(
     if title.trim().is_empty() {
         return Err(AppError::Validation("title is required".into()));
     }
-    if block_type.trim().is_empty() {
-        return Err(AppError::Validation("type is required".into()));
+    validate_length("title", title, 200)?;
+    if let Some(n) = note {
+        validate_length("note", n, 2000)?;
     }
-    parse_time(start_time)?;
-    if let Some(et) = end_time {
-        parse_time(et)?;
+    if !BLOCK_TYPES.contains(&block_type) {
+        return Err(AppError::Validation(format!(
+            "unknown block type '{block_type}'; allowed: {}",
+            BLOCK_TYPES.join(", ")
+        )));
     }
-    Ok(())
-}
+    let start = parse_time(start_time)?;
+    let end = end_time.map(parse_time).transpose()?;
 
-async fn verify_routine_owned(
-    state: &AppState,
-    user_id: Uuid,
-    routine_id: Uuid,
-) -> Result<(), AppError> {
-    let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM routines WHERE id = $1 AND user_id = $2")
-            .bind(routine_id)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-
-    if exists.is_none() {
-        return Err(AppError::NotFound);
+    if let Some(e) = end
+        && e <= start
+    {
+        return Err(AppError::Validation(
+            "end_time must be strictly after start_time".into(),
+        ));
     }
-    Ok(())
+
+    Ok((start, end))
 }
 
 async fn fetch_owned_block(
@@ -305,42 +323,42 @@ struct BlockLabelRow {
     is_default: bool,
 }
 
-/// Returns a flat list of `(block_id, LabelResponse)` pairs for all requested block IDs.
+/// Returns a `HashMap<block_id, Vec<LabelResponse>>` for all requested block IDs.
+/// O(1) per lookup at the call site. The `user_id` filter is defense-in-depth
+/// to prevent cross-user label leakage even if a write path mis-assigns labels.
 async fn fetch_labels_for_blocks(
     state: &AppState,
     block_ids: &[Uuid],
-) -> Result<Vec<(Uuid, LabelResponse)>, AppError> {
+    user_id: Uuid,
+) -> Result<HashMap<Uuid, Vec<LabelResponse>>, AppError> {
     if block_ids.is_empty() {
-        return Ok(vec![]);
+        return Ok(HashMap::new());
     }
 
     let rows: Vec<BlockLabelRow> = sqlx::query_as(
         "SELECT bl.block_id, l.id, l.name, l.color_bg, l.color_text, l.color_border, l.icon, l.is_default \
          FROM block_labels bl \
          JOIN labels l ON l.id = bl.label_id \
-         WHERE bl.block_id = ANY($1)",
+         WHERE bl.block_id = ANY($1) AND l.user_id = $2",
     )
     .bind(block_ids)
+    .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            (
-                row.block_id,
-                LabelResponse {
-                    id: row.id,
-                    name: row.name,
-                    color_bg: row.color_bg,
-                    color_text: row.color_text,
-                    color_border: row.color_border,
-                    icon: row.icon,
-                    is_default: row.is_default,
-                },
-            )
-        })
-        .collect())
+    let mut map: HashMap<Uuid, Vec<LabelResponse>> = HashMap::new();
+    for row in rows {
+        map.entry(row.block_id).or_default().push(LabelResponse {
+            id: row.id,
+            name: row.name,
+            color_bg: row.color_bg,
+            color_text: row.color_text,
+            color_border: row.color_border,
+            icon: row.icon,
+            is_default: row.is_default,
+        });
+    }
+    Ok(map)
 }
 
 #[cfg(test)]
@@ -365,25 +383,83 @@ mod tests {
 
     #[test]
     fn validate_block_fields_bad_day() {
-        let err = validate_block_fields(7, "09:00", None, "title", "trabalho");
+        let err = validate_block_fields(7, "09:00", None, "title", None, "trabalho");
         assert!(matches!(err, Err(AppError::Validation(_))));
     }
 
     #[test]
     fn validate_block_fields_empty_title() {
-        let err = validate_block_fields(1, "09:00", None, "  ", "trabalho");
+        let err = validate_block_fields(1, "09:00", None, "  ", None, "trabalho");
         assert!(matches!(err, Err(AppError::Validation(_))));
     }
 
     #[test]
     fn validate_block_fields_bad_time() {
-        let err = validate_block_fields(1, "9am", None, "title", "trabalho");
+        let err = validate_block_fields(1, "9am", None, "title", None, "trabalho");
         assert!(matches!(err, Err(AppError::Validation(_))));
     }
 
     #[test]
     fn validate_block_fields_ok() {
-        assert!(validate_block_fields(0, "09:00", Some("10:30"), "title", "trabalho").is_ok());
-        assert!(validate_block_fields(6, "23:00", None, "title", "livre").is_ok());
+        assert!(
+            validate_block_fields(0, "09:00", Some("10:30"), "title", None, "trabalho").is_ok()
+        );
+        assert!(validate_block_fields(6, "23:00", None, "title", None, "livre").is_ok());
+    }
+
+    #[test]
+    fn validate_block_fields_returns_parsed_times() {
+        let (start, end) =
+            validate_block_fields(1, "09:00", Some("10:30"), "title", None, "trabalho").unwrap();
+        assert_eq!(start, NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+        assert_eq!(end, Some(NaiveTime::from_hms_opt(10, 30, 0).unwrap()));
+    }
+
+    #[test]
+    fn validate_block_fields_end_before_start_rejected() {
+        let err = validate_block_fields(1, "10:00", Some("09:00"), "title", None, "trabalho");
+        assert!(matches!(err, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn validate_block_fields_end_equal_start_rejected() {
+        let err = validate_block_fields(1, "10:00", Some("10:00"), "title", None, "trabalho");
+        assert!(matches!(err, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn validate_block_fields_unknown_type_rejected() {
+        let err = validate_block_fields(1, "09:00", None, "title", None, "invalid_type");
+        assert!(matches!(err, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn validate_block_fields_all_known_types_accepted() {
+        for t in BLOCK_TYPES {
+            assert!(
+                validate_block_fields(0, "09:00", None, "title", None, t).is_ok(),
+                "type '{t}' should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_block_fields_title_too_long_rejected() {
+        let long_title = "a".repeat(201);
+        let err = validate_block_fields(1, "09:00", None, &long_title, None, "trabalho");
+        assert!(matches!(err, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn validate_block_fields_note_too_long_rejected() {
+        let long_note = "a".repeat(2001);
+        let err = validate_block_fields(1, "09:00", None, "title", Some(&long_note), "trabalho");
+        assert!(matches!(err, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn validate_block_fields_end_after_start_ok() {
+        let result = validate_block_fields(1, "08:00", Some("09:00"), "title", None, "trabalho");
+        assert!(result.is_ok());
     }
 }

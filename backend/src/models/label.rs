@@ -1,6 +1,18 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
+
+/// Deserializer for an optional field where the outer `Option` means "field was
+/// present in JSON" and the inner `Option` is the value (which may be `null`).
+/// Absent key  → `None`
+/// `"icon": null` → `Some(None)`
+/// `"icon": "star"` → `Some(Some("star".to_string()))`
+fn deserialize_optional_field<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Label {
@@ -51,13 +63,19 @@ pub struct CreateLabelRequest {
 }
 
 /// Request body for `PUT /api/labels/:id`.
+///
+/// `icon` uses double-Option semantics:
+/// - absent key → `None` (do not touch the DB column)
+/// - `"icon": null` → `Some(None)` (clear the column to NULL)
+/// - `"icon": "star"` → `Some(Some("star"))` (set a value)
 #[derive(Debug, Deserialize)]
 pub struct UpdateLabelRequest {
     pub name: Option<String>,
     pub color_bg: Option<String>,
     pub color_text: Option<String>,
     pub color_border: Option<String>,
-    pub icon: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub icon: Option<Option<String>>,
 }
 
 #[cfg(test)]

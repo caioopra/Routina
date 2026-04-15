@@ -422,6 +422,199 @@ async fn delete_block_unknown_id_returns_404(pool: PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// Block type allowlist
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_block_unknown_type_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-block-badtype@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (status, _) = create_block(
+        &app,
+        &token,
+        &routine_id,
+        json!({
+            "day_of_week": 1,
+            "start_time": "09:00",
+            "title": "Unknown type",
+            "type": "invalid_type"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_block_all_known_types_accepted(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-block-alltypes@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let known_types = &[
+        "trabalho",
+        "mestrado",
+        "aula",
+        "exercicio",
+        "slides",
+        "viagem",
+        "livre",
+    ];
+
+    for block_type in known_types {
+        let (status, _) = create_block(
+            &app,
+            &token,
+            &routine_id,
+            json!({
+                "day_of_week": 0,
+                "start_time": "09:00",
+                "title": format!("Block {block_type}"),
+                "type": block_type
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "type '{block_type}' should be accepted"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Time ordering validation
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_block_end_before_start_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-block-badorder@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (status, _) = create_block(
+        &app,
+        &token,
+        &routine_id,
+        json!({
+            "day_of_week": 1,
+            "start_time": "10:00",
+            "end_time": "09:00",
+            "title": "Bad order",
+            "type": "trabalho"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_block_end_equal_start_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-block-equaltime@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (status, _) = create_block(
+        &app,
+        &token,
+        &routine_id,
+        json!({
+            "day_of_week": 1,
+            "start_time": "10:00",
+            "end_time": "10:00",
+            "title": "Equal times",
+            "type": "trabalho"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_block_end_before_start_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "update-block-badorder@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (_, created) = create_block(&app, &token, &routine_id, default_block_body()).await;
+    let block_id = created["id"].as_str().unwrap();
+
+    // default block: start=09:00, end=10:00. Now send start=11:00, end=10:00
+    let (status, _) = json_oneshot(
+        &app,
+        Method::PUT,
+        &format!("/api/blocks/{block_id}"),
+        Some(json!({
+            "start_time": "11:00",
+            "end_time": "10:00"
+        })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ---------------------------------------------------------------------------
+// Length bounds
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_block_title_too_long_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-block-longtitle@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (status, _) = create_block(
+        &app,
+        &token,
+        &routine_id,
+        json!({
+            "day_of_week": 1,
+            "start_time": "09:00",
+            "title": "a".repeat(201),
+            "type": "trabalho"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_block_valid_edit_succeeds(pool: PgPool) {
+    // Exercises the update path where parse_time is only called once — no .expect() risk.
+    let app = build_app(pool);
+    let token = register_and_token(&app, "update-block-valid@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (_, created) = create_block(&app, &token, &routine_id, default_block_body()).await;
+    let block_id = created["id"].as_str().unwrap();
+
+    let (status, body) = json_oneshot(
+        &app,
+        Method::PUT,
+        &format!("/api/blocks/{block_id}"),
+        Some(json!({
+            "start_time": "08:30",
+            "end_time": "09:30",
+            "title": "Updated Title"
+        })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body["start_time"], "08:30");
+    assert_eq!(body["end_time"], "09:30");
+    assert_eq!(body["title"], "Updated Title");
+}
+
+// ---------------------------------------------------------------------------
 // Cross-user isolation
 // ---------------------------------------------------------------------------
 

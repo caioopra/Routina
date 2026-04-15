@@ -368,6 +368,145 @@ async fn default_label_with_pool_cannot_be_updated(pool: PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// Icon can be cleared (double-Option / explicit null)
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_label_icon_can_be_cleared_to_null(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "update-label-clearicon@example.com").await;
+
+    // Create a label with an icon.
+    let (_, created) = create_label(&app, &token, default_label_body()).await;
+    let id = created["id"].as_str().unwrap();
+    assert_eq!(created["icon"], "star");
+
+    // Send explicit null for icon — should clear it.
+    let (status, body) = json_oneshot(
+        &app,
+        Method::PUT,
+        &format!("/api/labels/{id}"),
+        Some(serde_json::json!({ "icon": serde_json::Value::Null })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body["icon"].is_null(), "icon should be null after clearing");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_label_absent_icon_leaves_existing_value(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "update-label-keepicon@example.com").await;
+
+    let (_, created) = create_label(&app, &token, default_label_body()).await;
+    let id = created["id"].as_str().unwrap();
+
+    // Update only the name — icon key is absent entirely.
+    let (status, body) = json_oneshot(
+        &app,
+        Method::PUT,
+        &format!("/api/labels/{id}"),
+        Some(json!({ "name": "New Name" })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    // Icon should remain "star" because the key was not sent.
+    assert_eq!(body["icon"], "star");
+}
+
+// ---------------------------------------------------------------------------
+// Hex color validation
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_label_invalid_color_bg_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-label-badhex@example.com").await;
+
+    let (status, _) = create_label(
+        &app,
+        &token,
+        json!({
+            "name": "Bad Color",
+            "color_bg": "not-a-hex",
+            "color_text": "#ffffff",
+            "color_border": "#000000"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_label_invalid_color_text_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-label-badhex2@example.com").await;
+
+    let (status, _) = create_label(
+        &app,
+        &token,
+        json!({
+            "name": "Bad Color Text",
+            "color_bg": "#000000",
+            "color_text": "blue",
+            "color_border": "#000000"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_label_invalid_hex_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "update-label-badhex@example.com").await;
+
+    let (_, created) = create_label(&app, &token, default_label_body()).await;
+    let id = created["id"].as_str().unwrap();
+
+    let (status, _) = json_oneshot(
+        &app,
+        Method::PUT,
+        &format!("/api/labels/{id}"),
+        Some(json!({ "color_bg": "not-a-hex" })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ---------------------------------------------------------------------------
+// Length bounds
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_label_name_too_long_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-label-longname@example.com").await;
+
+    let (status, _) = create_label(
+        &app,
+        &token,
+        json!({
+            "name": "a".repeat(101),
+            "color_bg": "#000000",
+            "color_text": "#ffffff",
+            "color_border": "#888888"
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ---------------------------------------------------------------------------
 // Cross-user isolation
 // ---------------------------------------------------------------------------
 

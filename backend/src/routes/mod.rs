@@ -1,7 +1,9 @@
 use axum::Router;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::config::Config;
+use crate::middleware::error::AppError;
 
 pub mod auth;
 pub mod blocks;
@@ -33,4 +35,40 @@ pub fn create_router(pool: PgPool, config: Config) -> Router {
 pub struct AppState {
     pub pool: PgPool,
     pub config: Config,
+}
+
+/// Verifies that the routine exists and belongs to the given user.
+/// Returns `AppError::NotFound` if not owned or not found, to avoid leaking
+/// information about the existence of other users' routines.
+pub(super) async fn verify_routine_owned(
+    pool: &PgPool,
+    user_id: Uuid,
+    routine_id: Uuid,
+) -> Result<(), AppError> {
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM routines WHERE id = $1 AND user_id = $2")
+            .bind(routine_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+
+    if exists.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+/// Returns `AppError::Validation` if `value` exceeds `max_len` bytes.
+/// Use for free-text fields to prevent excessively large payloads.
+pub(super) fn validate_length(
+    field_name: &str,
+    value: &str,
+    max_len: usize,
+) -> Result<(), AppError> {
+    if value.len() > max_len {
+        return Err(AppError::Validation(format!(
+            "{field_name} must be at most {max_len} characters"
+        )));
+    }
+    Ok(())
 }

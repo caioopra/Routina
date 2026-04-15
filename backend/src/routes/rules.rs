@@ -10,7 +10,7 @@ use crate::middleware::CurrentUser;
 use crate::middleware::error::AppError;
 use crate::models::rule::{CreateRuleRequest, Rule, UpdateRuleRequest};
 
-use super::AppState;
+use super::{AppState, validate_length, verify_routine_owned};
 
 /// Sub-router for `/routines/:routine_id/rules` (GET + POST).
 pub fn nested_router() -> Router<AppState> {
@@ -30,7 +30,7 @@ async fn list_rules(
     Path(routine_id): Path<Uuid>,
 ) -> Result<Json<Vec<Rule>>, AppError> {
     // Verify ownership of the routine (returns 404 if not found or not owned).
-    verify_routine_owned(&state, user.id, routine_id).await?;
+    verify_routine_owned(&state.pool, user.id, routine_id).await?;
 
     let rows = sqlx::query_as::<_, Rule>(&format!(
         "SELECT {SELECT_COLUMNS} FROM rules \
@@ -49,11 +49,12 @@ async fn create_rule(
     Path(routine_id): Path<Uuid>,
     Json(body): Json<CreateRuleRequest>,
 ) -> Result<(StatusCode, Json<Rule>), AppError> {
-    verify_routine_owned(&state, user.id, routine_id).await?;
+    verify_routine_owned(&state.pool, user.id, routine_id).await?;
 
     if body.text.trim().is_empty() {
         return Err(AppError::Validation("text is required".into()));
     }
+    validate_length("text", &body.text, 2000)?;
 
     let id = Uuid::now_v7();
     let sort_order = body.sort_order.unwrap_or(0);
@@ -82,10 +83,11 @@ async fn update_rule(
     // Ownership is verified by joining rules -> routines -> user.
     fetch_owned_rule(&state, user.id, id).await?;
 
-    if let Some(ref text) = body.text
-        && text.trim().is_empty()
-    {
-        return Err(AppError::Validation("text cannot be empty".into()));
+    if let Some(ref text) = body.text {
+        if text.trim().is_empty() {
+            return Err(AppError::Validation("text cannot be empty".into()));
+        }
+        validate_length("text", text, 2000)?;
     }
 
     let updated = sqlx::query_as::<_, Rule>(&format!(
@@ -125,25 +127,6 @@ async fn delete_rule(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Verifies that the routine exists and belongs to the given user.
-async fn verify_routine_owned(
-    state: &AppState,
-    user_id: Uuid,
-    routine_id: Uuid,
-) -> Result<(), AppError> {
-    let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM routines WHERE id = $1 AND user_id = $2")
-            .bind(routine_id)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-
-    if exists.is_none() {
-        return Err(AppError::NotFound);
-    }
-    Ok(())
-}
-
 /// Fetches a rule and verifies that its parent routine belongs to the user.
 async fn fetch_owned_rule(
     state: &AppState,
@@ -175,5 +158,17 @@ mod tests {
         assert!(cols.contains(&"routine_id"));
         assert!(cols.contains(&"text"));
         assert!(cols.contains(&"sort_order"));
+    }
+
+    #[test]
+    fn validate_length_ok() {
+        assert!(validate_length("text", "hello", 2000).is_ok());
+        assert!(validate_length("text", &"a".repeat(2000), 2000).is_ok());
+    }
+
+    #[test]
+    fn validate_length_exceeded() {
+        let err = validate_length("text", &"a".repeat(2001), 2000);
+        assert!(matches!(err, Err(AppError::Validation(_))));
     }
 }

@@ -352,6 +352,49 @@ async fn delete_rule_unknown_id_returns_404(pool: PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// Length bounds
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_rule_text_too_long_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "create-rule-longtext@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (status, _) = create_rule(
+        &app,
+        &token,
+        &routine_id,
+        json!({ "text": "a".repeat(2001) }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn update_rule_text_too_long_returns_422(pool: PgPool) {
+    let app = build_app(pool);
+    let token = register_and_token(&app, "update-rule-longtext@example.com").await;
+    let routine_id = create_routine(&app, &token).await;
+
+    let (_, created) =
+        create_rule(&app, &token, &routine_id, json!({ "text": "Short text" })).await;
+    let rule_id = created["id"].as_str().unwrap();
+
+    let (status, _) = json_oneshot(
+        &app,
+        Method::PUT,
+        &format!("/api/rules/{rule_id}"),
+        Some(json!({ "text": "a".repeat(2001) })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ---------------------------------------------------------------------------
 // List rules — sort order
 // ---------------------------------------------------------------------------
 
