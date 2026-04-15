@@ -148,11 +148,18 @@ impl RateLimitState {
 /// indefinite harassment while letting the real user log in.  The alternative
 /// (only counting failures) would allow an attacker to interleave one correct
 /// attempt per window to keep resetting, which is worse.
+///
+/// To prevent unbounded map growth under a high-volume enumeration attack
+/// (e.g. 10 requests to each of 1 M fabricated addresses), the implementation
+/// runs an opportunistic sweep every `SWEEP_INTERVAL` calls to evict entries
+/// whose sliding windows have fully expired.
 #[derive(Clone)]
 pub struct EmailRateLimitState {
     pub buckets: Arc<DashMap<String, VecDeque<Instant>>>,
     pub max_attempts: usize,
     pub window_secs: u64,
+    /// Monotonically increasing counter used to trigger periodic sweeps.
+    call_count: Arc<AtomicU64>,
 }
 
 impl EmailRateLimitState {
@@ -161,7 +168,30 @@ impl EmailRateLimitState {
             buckets: Arc::new(DashMap::new()),
             max_attempts,
             window_secs,
+            call_count: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Remove all map entries whose timestamps have all expired.
+    ///
+    /// Called opportunistically every `SWEEP_INTERVAL` calls so that email
+    /// buckets from inactive/fabricated addresses do not accumulate forever.
+    /// Each bucket's stale timestamps are trimmed first; if the bucket is then
+    /// empty it is removed from the map.
+    pub fn sweep_empty(&self) {
+        let window = tokio::time::Duration::from_secs(self.window_secs);
+        let now = Instant::now();
+        let cutoff = now.checked_sub(window).unwrap_or(now);
+        self.buckets.retain(|_, deque| {
+            while let Some(&front) = deque.front() {
+                if front <= cutoff {
+                    deque.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !deque.is_empty()
+        });
     }
 
     /// Check and record a login attempt for `email`.
@@ -196,6 +226,17 @@ impl EmailRateLimitState {
         }
 
         deque.push_back(now);
+        // Drop the entry guard before potentially calling sweep_empty, which
+        // needs to acquire shard locks itself.
+        drop(entry);
+
+        // Opportunistic sweep: every SWEEP_INTERVAL calls, trim stale buckets
+        // to prevent unbounded growth from fabricated/inactive email addresses.
+        let count = self.call_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if count.is_multiple_of(SWEEP_INTERVAL) {
+            self.sweep_empty();
+        }
+
         Ok(())
     }
 
@@ -407,5 +448,86 @@ mod tests {
             "stale buckets should be evicted after opportunistic sweep"
         );
         assert!(state.buckets.contains_key(&active_uid));
+    }
+
+    // ── EmailRateLimitState tests ─────────────────────────────────────────────
+
+    fn make_email_state(max: usize, window_secs: u64) -> EmailRateLimitState {
+        EmailRateLimitState::new(max, window_secs)
+    }
+
+    #[tokio::test]
+    async fn email_allows_requests_under_limit() {
+        let state = make_email_state(3, LOGIN_RATE_WINDOW_SECS);
+        assert!(state.check_and_record("alice@example.com").is_ok());
+        assert!(state.check_and_record("alice@example.com").is_ok());
+        assert!(state.check_and_record("alice@example.com").is_ok());
+    }
+
+    #[tokio::test]
+    async fn email_rejects_at_limit() {
+        let state = make_email_state(2, LOGIN_RATE_WINDOW_SECS);
+        assert!(state.check_and_record("bob@example.com").is_ok());
+        assert!(state.check_and_record("bob@example.com").is_ok());
+        let result = state.check_and_record("bob@example.com");
+        assert!(result.is_err(), "should be rejected at limit");
+        let retry = result.unwrap_err();
+        assert!(retry >= 1, "retry_after must be at least 1: {retry}");
+    }
+
+    #[tokio::test]
+    async fn email_clear_resets_bucket() {
+        let state = make_email_state(2, LOGIN_RATE_WINDOW_SECS);
+        assert!(state.check_and_record("carol@example.com").is_ok());
+        assert!(state.check_and_record("carol@example.com").is_ok());
+        // Bucket is now full.
+        assert!(state.check_and_record("carol@example.com").is_err());
+        // Clearing should allow requests again.
+        state.clear("carol@example.com");
+        assert!(
+            state.check_and_record("carol@example.com").is_ok(),
+            "should be allowed after clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn email_sweep_removes_inactive_entries() {
+        tokio::time::pause();
+
+        // Short window (5 s) so we can advance past it easily.
+        let window_secs = 5u64;
+        let state = make_email_state(10, window_secs);
+
+        let email_a = "sweep-a@example.com";
+        let email_b = "sweep-b@example.com";
+        let email_c = "sweep-c@example.com";
+
+        // Record one attempt for each address.
+        assert!(state.check_and_record(email_a).is_ok());
+        assert!(state.check_and_record(email_b).is_ok());
+        assert!(state.check_and_record(email_c).is_ok());
+
+        // All three buckets are present.
+        assert_eq!(state.buckets.len(), 3);
+
+        // Advance past the window so all timestamps become stale.
+        tokio::time::advance(tokio::time::Duration::from_secs(window_secs + 1)).await;
+
+        // A new request for email_a evicts its own stale timestamps during
+        // check_and_record; the explicit sweep then removes email_b and email_c.
+        assert!(state.check_and_record(email_a).is_ok());
+
+        state.sweep_empty();
+
+        // Only email_a's active bucket should remain.
+        assert_eq!(
+            state.buckets.len(),
+            1,
+            "sweep should evict fully-expired email buckets"
+        );
+        assert!(
+            state.buckets.contains_key(email_a),
+            "email_a bucket should still be present"
+        );
     }
 }

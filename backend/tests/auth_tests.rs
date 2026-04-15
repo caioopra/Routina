@@ -5,6 +5,7 @@ use common::{build_app, json_oneshot, register_test_user};
 use planner_backend::auth::{TokenKind, decode_token};
 use serde_json::json;
 use sqlx::PgPool;
+use std::time::Instant;
 use uuid::Uuid;
 
 const JWT_SECRET: &str = "test-secret";
@@ -213,4 +214,61 @@ async fn me_with_refresh_token_returns_401(pool: PgPool) {
         json_oneshot(&app, Method::GET, "/api/auth/me", None, Some(refresh_token)).await;
 
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Verify that both the "email not found" and "wrong password" paths exercise
+/// the argon2 slow hash, preventing a timing side-channel that would allow an
+/// attacker to enumerate registered email addresses.
+///
+/// We assert that each path takes at least 50 ms, which proves argon2 ran.
+/// We do not assert equality of the two durations — that is inherently fragile
+/// under CI load.  The important property is that the fast short-circuit
+/// (returning immediately without any hash work) is not present.
+#[sqlx::test(migrations = "./migrations")]
+async fn login_timing_equalized_for_unknown_email(pool: PgPool) {
+    let app = build_app(pool);
+
+    let email = "timing-test@example.com";
+    let password = "correctpassword1234";
+    register_test_user(&app, email, password).await;
+
+    // Path A: email exists, wrong password → argon2 verify runs.
+    let start_a = Instant::now();
+    let (status_a, _) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        Some(json!({ "email": email, "password": "wrongpassword" })),
+        None,
+    )
+    .await;
+    let elapsed_a = start_a.elapsed();
+
+    // Path B: email does not exist → dummy hash verify runs.
+    let start_b = Instant::now();
+    let (status_b, _) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        Some(json!({ "email": "nobody@example.com", "password": "wrongpassword" })),
+        None,
+    )
+    .await;
+    let elapsed_b = start_b.elapsed();
+
+    assert_eq!(status_a, StatusCode::UNAUTHORIZED);
+    assert_eq!(status_b, StatusCode::UNAUTHORIZED);
+
+    // Both paths must have spent time on argon2 (≥ 50 ms is a safe lower bound
+    // even on slow CI; the default argon2 params typically take 100–300 ms).
+    assert!(
+        elapsed_a.as_millis() >= 50,
+        "path A (wrong password) took only {}ms — argon2 may have been skipped",
+        elapsed_a.as_millis()
+    );
+    assert!(
+        elapsed_b.as_millis() >= 50,
+        "path B (unknown email) took only {}ms — dummy hash work may have been skipped",
+        elapsed_b.as_millis()
+    );
 }

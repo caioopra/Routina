@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::{Json, Router, extract::State, routing::get, routing::post};
@@ -12,6 +14,26 @@ use crate::middleware::error::AppError;
 use crate::models::user::{AuthResponse, CreateUser, LoginRequest, User, UserPublic};
 
 use super::AppState;
+
+/// A dummy password hash computed once at first use.
+///
+/// When a login request arrives for an email that does not exist in the
+/// database, the handler calls `verify_password` against this hash with the
+/// supplied (wrong) password.  This ensures the slow argon2 path runs
+/// regardless of whether the email exists, preventing a timing side-channel
+/// that would allow an attacker to enumerate registered addresses by measuring
+/// response latency.
+///
+/// The hash is generated from a hardcoded placeholder string so it is always
+/// well-formed (argon2 encoded format).  The verification will always fail —
+/// the result is intentionally discarded.
+static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+
+fn dummy_hash() -> &'static str {
+    DUMMY_HASH.get_or_init(|| {
+        hash_password("placeholder-dummy-constant").expect("dummy hash generation must not fail")
+    })
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -114,14 +136,24 @@ async fn login(
             .into_response());
     }
 
-    let user = sqlx::query_as::<_, User>(
+    let user_opt = sqlx::query_as::<_, User>(
         "SELECT id, email, name, password_hash, preferences, created_at, updated_at, role \
          FROM users WHERE email = $1",
     )
     .bind(&normalized_email)
     .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    .await?;
+
+    // When the email is not found, run `verify_password` against the static
+    // dummy hash anyway.  This equalizes the response time for the "email not
+    // found" and "wrong password" cases, preventing a timing side-channel that
+    // would allow an attacker to enumerate which addresses are registered.
+    // The result is always `false` (wrong password); we discard it and fall
+    // through to the same `Unauthorized` error returned for a wrong password.
+    let Some(user) = user_opt else {
+        let _ = verify_password(&body.password, dummy_hash());
+        return Err(AppError::Unauthorized);
+    };
 
     if !verify_password(&body.password, &user.password_hash)? {
         return Err(AppError::Unauthorized);

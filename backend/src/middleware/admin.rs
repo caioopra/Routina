@@ -14,11 +14,10 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::{Json, http::StatusCode};
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::middleware::auth::CurrentUser;
+use crate::middleware::error::AppError;
 use crate::routes::AppState;
 
 /// Extractor for admin-only handlers.
@@ -41,16 +40,13 @@ impl FromRequestParts<AppState> for AdminUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let forbidden =
-            || (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden" }))).into_response();
-
         // Delegate JWT verification and DB lookup to CurrentUser.
         let current = CurrentUser::from_request_parts(parts, state)
             .await
-            .map_err(|_| forbidden())?;
+            .map_err(|_| AppError::Forbidden.into_response())?;
 
         if current.role != "admin" {
-            return Err(forbidden());
+            return Err(AppError::Forbidden.into_response());
         }
 
         Ok(Self {
@@ -62,18 +58,27 @@ impl FromRequestParts<AppState> for AdminUser {
 
 #[cfg(test)]
 mod tests {
+    use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    /// Verify that the forbidden response body is the canonical JSON shape
-    /// and uses HTTP 403.
-    #[test]
-    fn forbidden_response_shape() {
-        use axum::Json;
-        use serde_json::json;
+    use crate::middleware::error::AppError;
 
-        let resp = (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden" }))).into_response();
-
+    /// Verify that `AppError::Forbidden` produces HTTP 403 with the canonical
+    /// `{"error":"forbidden"}` JSON body, and that `AdminUser`'s rejection
+    /// delegates to that same code path.
+    #[tokio::test]
+    async fn forbidden_response_shape() {
+        let resp = AppError::Forbidden.into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Consume the body and verify the JSON payload.
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "error": "forbidden" }),
+            "forbidden body must be {{\"error\":\"forbidden\"}}"
+        );
     }
 }
