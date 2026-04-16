@@ -22,6 +22,10 @@ use crate::middleware::rate_limit::{
 pub const CONFIRM_RATE_MAX: usize = 5;
 /// Sliding-window duration for the confirm rate limiter (5 minutes).
 pub const CONFIRM_RATE_WINDOW_SECS: u64 = 300;
+/// Maximum registration attempts per email per window.
+pub const REGISTER_RATE_MAX: usize = 5;
+/// Sliding-window duration for the registration rate limiter (15 minutes).
+pub const REGISTER_RATE_WINDOW_SECS: u64 = 900;
 
 // ── SettingsCache ─────────────────────────────────────────────────────────────
 
@@ -176,6 +180,7 @@ pub fn create_router_with_rate_limit(
         providers,
         rate_limit: RateLimitState::new(chat_rate_limit),
         login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
+        register_rate_limit: EmailRateLimitState::new(REGISTER_RATE_MAX, REGISTER_RATE_WINDOW_SECS),
         confirm_rate_limit: EmailRateLimitState::new(CONFIRM_RATE_MAX, CONFIRM_RATE_WINDOW_SECS),
         settings_cache: SettingsCache::new(),
         chat_semaphores: Arc::new(DashMap::new()),
@@ -233,6 +238,7 @@ pub fn create_router_with_providers(
         providers,
         rate_limit: RateLimitState::new(CHAT_RATE_LIMIT),
         login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
+        register_rate_limit: EmailRateLimitState::new(REGISTER_RATE_MAX, REGISTER_RATE_WINDOW_SECS),
         confirm_rate_limit: EmailRateLimitState::new(CONFIRM_RATE_MAX, CONFIRM_RATE_WINDOW_SECS),
         settings_cache: SettingsCache::new(),
         chat_semaphores: Arc::new(DashMap::new()),
@@ -297,6 +303,11 @@ pub struct AppState {
     /// Per-email sliding-window rate limiter for the login endpoint.
     /// Keyed on the normalized (lowercase, trimmed) email address.
     pub login_rate_limit: EmailRateLimitState,
+    /// Per-email sliding-window rate limiter for the register endpoint.
+    /// Keyed on the normalized (lowercase, trimmed) email address.
+    /// Separate from `login_rate_limit` so login tests are not affected by
+    /// registration attempts.
+    pub register_rate_limit: EmailRateLimitState,
     /// Per-user sliding-window rate limiter for the step-up confirm endpoint.
     /// Keyed on the admin's user_id (as a String).
     /// Configured for 5 attempts per 5-minute window.

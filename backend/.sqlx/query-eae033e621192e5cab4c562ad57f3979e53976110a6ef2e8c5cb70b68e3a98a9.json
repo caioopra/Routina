@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT action, target_type, target_id FROM audit_log WHERE action = 'admin.settings.update' AND target_type = 'setting' AND target_id = 'budget_warn_pct' ORDER BY created_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "action",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "target_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "target_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "eae033e621192e5cab4c562ad57f3979e53976110a6ef2e8c5cb70b68e3a98a9"
+}
