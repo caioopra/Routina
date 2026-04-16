@@ -41,7 +41,18 @@ CREATE TABLE audit_log (
     action        TEXT NOT NULL,
     target_type   TEXT,
     target_id     TEXT,
-    payload       JSONB,
+    payload       JSONB
+                  CONSTRAINT audit_payload_no_secrets CHECK (
+                      payload IS NULL
+                      OR (
+                          NOT payload ? 'password'
+                          AND NOT payload ? 'password_hash'
+                          AND NOT payload ? 'token'
+                          AND NOT payload ? 'refresh_token'
+                          AND NOT payload ? 'secret'
+                          AND NOT payload ? 'api_key'
+                      )
+                  ),
     ip            INET,
     user_agent    TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
