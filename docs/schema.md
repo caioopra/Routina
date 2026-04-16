@@ -214,6 +214,9 @@ Separate from `routine_actions`, which tracks LLM tool-driven routine mutations;
 **Indexes:**
 - `(actor_id, created_at DESC)` — per-actor activity view and forensic queries
 - `(action, created_at DESC)` — action-type breakdown on the admin dashboard
+- `(created_at DESC)` — bare index for the 90-day retention cleanup job (`DELETE FROM audit_log WHERE created_at < now() - INTERVAL '90 days'`); the composite indexes above are not used for this scan because their leading column does not match the predicate
+
+**Payload safety:** the application-layer `emit_audit` function must strip sensitive keys (`password`, `password_hash`, `token`, `refresh_token`, `secret`, `api_key`) from the JSONB payload before insert. Credentials must never appear in this table.
 
 ### `rules`
 Monthly rules/guidelines for a routine.

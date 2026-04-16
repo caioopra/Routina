@@ -18,6 +18,9 @@
 -- target_id     — the entity's id (stored as TEXT to accommodate both UUIDs
 --                 and future non-UUID keys without a schema change).
 -- payload       — arbitrary JSONB context; what changed, before/after, etc.
+--                 IMPORTANT: the application-layer emit_audit function MUST strip
+--                 sensitive keys before insert: password, password_hash, token,
+--                 refresh_token, secret, api_key.  Never store credentials here.
 -- ip            — INET of the requester at write time (from X-Forwarded-For or
 --                 the direct socket address).
 -- user_agent    — raw User-Agent header, useful for forensic investigation.
@@ -25,6 +28,7 @@
 --                 never modified after insert.
 --
 -- DOWN (manual revert):
+--   DROP INDEX IF EXISTS audit_log_created_at;
 --   DROP INDEX IF EXISTS audit_log_action_created;
 --   DROP INDEX IF EXISTS audit_log_actor_created;
 --   DROP TABLE IF EXISTS audit_log;
@@ -50,3 +54,10 @@ CREATE INDEX audit_log_actor_created  ON audit_log (actor_id, created_at DESC);
 -- Composite index: all occurrences of an action type, newest first.
 -- Serves the admin dashboard action-type breakdown and alerting queries.
 CREATE INDEX audit_log_action_created ON audit_log (action, created_at DESC);
+
+-- Bare created_at index for the 90-day retention cleanup job.
+-- The composite indexes above are NOT used for a plain
+--   DELETE FROM audit_log WHERE created_at < now() - INTERVAL '90 days'
+-- scan because the leading column differs.  This standalone index lets
+-- Postgres resolve that predicate with an index range scan.
+CREATE INDEX audit_log_created_at ON audit_log (created_at DESC);
