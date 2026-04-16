@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::{Json, Router, extract::State, routing::get, routing::post};
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,8 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::auth::{TokenKind, decode_token, encode_token, hash_password, verify_password};
-use crate::middleware::CurrentUser;
 use crate::middleware::error::AppError;
+use crate::middleware::{CurrentUser, emit_audit};
 use crate::models::user::{AuthResponse, CreateUser, LoginRequest, User, UserPublic};
 
 use super::AppState;
@@ -113,11 +113,20 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     // Normalize email before rate-limit check so that "User@Example.com" and
     // "user@example.com" share the same bucket.
     let normalized_email = body.email.trim().to_lowercase();
+
+    // Extract IP for audit logging from the X-Forwarded-For header.
+    // We don't have direct socket access in this layer, so we rely on the
+    // proxy-injected header.  None is acceptable — audit rows may have no IP.
+    let ip: Option<String> = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_owned());
 
     // Check the per-email rate limit BEFORE any DB lookup or password
     // comparison.  This prevents timing-oracle attacks: the 429 response is
@@ -125,6 +134,27 @@ async fn login(
     // database, so an attacker cannot use the 429 threshold to confirm that an
     // email is registered.
     if let Err(retry_after) = state.login_rate_limit.check_and_record(&normalized_email) {
+        // Fix 6: audit-log rate-limited attempts so credential-stuffing attacks
+        // are visible in the audit trail.  Fire-and-forget — if the insert fails
+        // we still return 429 immediately without blocking.
+        let pool = state.pool.clone();
+        let email_clone = normalized_email.clone();
+        let ip_clone = ip.clone();
+        tokio::spawn(async move {
+            let _ = emit_audit(
+                &pool,
+                None,
+                &email_clone,
+                "auth.login.rate_limited",
+                Some("email"),
+                Some(&email_clone),
+                None,
+                ip_clone.as_deref(),
+                None,
+            )
+            .await;
+        });
+
         let body = json!({
             "error": "rate_limited",
             "retry_after_seconds": retry_after,
@@ -153,10 +183,37 @@ async fn login(
     // through to the same `Unauthorized` error returned for a wrong password.
     let Some(user) = user_opt else {
         let _ = verify_password(&body.password, dummy_hash());
+        // Emit audit for login failure (email not found).
+        // No actor_id since there is no authenticated user.
+        let _ = emit_audit(
+            &state.pool,
+            None,
+            &normalized_email,
+            "auth.login.fail",
+            Some("email"),
+            Some(&normalized_email),
+            None,
+            ip.as_deref(),
+            None,
+        )
+        .await;
         return Err(AppError::Unauthorized);
     };
 
     if !verify_password(&body.password, &user.password_hash)? {
+        // Emit audit for login failure (wrong password).
+        let _ = emit_audit(
+            &state.pool,
+            Some(user.id),
+            &user.email,
+            "auth.login.fail",
+            Some("user"),
+            Some(&user.id.to_string()),
+            None,
+            ip.as_deref(),
+            None,
+        )
+        .await;
         return Err(AppError::Unauthorized);
     }
 
@@ -166,6 +223,20 @@ async fn login(
     state.login_rate_limit.clear(&normalized_email);
 
     let (token, refresh_token) = mint_token_pair(&state, user.id)?;
+
+    // Emit audit for login success.
+    let _ = emit_audit(
+        &state.pool,
+        Some(user.id),
+        &user.email,
+        "auth.login.success",
+        Some("user"),
+        Some(&user.id.to_string()),
+        None,
+        ip.as_deref(),
+        None,
+    )
+    .await;
 
     Ok(Json(AuthResponse {
         user: UserPublic::from(user),
@@ -185,6 +256,30 @@ async fn refresh(
     }
 
     let (token, refresh_token) = mint_token_pair(&state, claims.sub)?;
+
+    // Emit audit for successful token refresh.  Fetch email for the audit row —
+    // ignore failures so a missing user doesn't block the refresh response.
+    let email_opt: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(email) = email_opt {
+        let _ = emit_audit(
+            &state.pool,
+            Some(claims.sub),
+            &email,
+            "auth.token.refresh",
+            Some("user"),
+            Some(&claims.sub.to_string()),
+            None,
+            None,
+            None,
+        )
+        .await;
+    }
 
     Ok(Json(RefreshResponse {
         token,
