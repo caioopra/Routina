@@ -143,6 +143,26 @@ async fn confirm(
     Ok(Json(ConfirmResponse { confirm_token }))
 }
 
+// ── Client info helper ────────────────────────────────────────────────────────
+
+/// Extract IP address and user-agent from request headers.
+///
+/// The IP is taken from the first entry in `x-forwarded-for` (proxy-injected);
+/// if absent, `None` is returned.  The user-agent is taken verbatim from the
+/// `user-agent` header.  Both may be `None` for requests that arrive without
+/// those headers (e.g. direct connections in tests).
+fn extract_client_info(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string());
+    let ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    (ip, ua)
+}
+
 // ── Confirm token validation helper ──────────────────────────────────────────
 
 /// Read `x-confirm-token` from request headers, decode it, verify that its
@@ -382,6 +402,9 @@ async fn settings_update(
         )?;
     }
 
+    // Extract IP and user-agent for the audit row.
+    let (ip, ua) = extract_client_info(&headers);
+
     // UPDATE — the DB CHECK constraint enforces that only known keys exist.
     let updated = sqlx::query_as::<_, SettingRow>(
         "UPDATE app_settings SET value = $1, updated_by = $2 WHERE key = $3 \
@@ -406,8 +429,8 @@ async fn settings_update(
         Some("setting"),
         Some(&body.key),
         Some(json!({ "new_value": body.value })),
-        None,
-        None,
+        ip.as_deref(),
+        ua.as_deref(),
     )
     .await;
 
@@ -504,14 +527,27 @@ struct RateLimitRequest {
 
 /// `POST /api/admin/users/:id/rate-limit`
 ///
-/// Upserts a per-user rate limit override.  Requires `AdminUser`.
-/// Emits an audit event on success.
+/// Upserts a per-user rate limit override.  Requires `AdminUser` and a valid
+/// `x-confirm-token` for action `"admin.user.rate_limit"`.
+/// Emits an audit event (including IP and user-agent) on success.
 async fn users_set_rate_limit(
     State(state): State<AppState>,
     admin: AdminUser,
+    headers: HeaderMap,
     Path(target_user_id): Path<Uuid>,
     Json(body): Json<RateLimitRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Step-up auth: validate confirm token for this action.
+    validate_confirm_token(
+        &headers,
+        &state.config.jwt_secret,
+        "admin.user.rate_limit",
+        admin.user_id,
+    )?;
+
+    // Extract IP and user-agent for the audit row.
+    let (ip, ua) = extract_client_info(&headers);
+
     // Verify the target user exists.
     let user_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
         .bind(target_user_id)
@@ -553,8 +589,8 @@ async fn users_set_rate_limit(
             "daily_request_limit": body.daily_request_limit,
             "override_reason":     body.override_reason,
         })),
-        None,
-        None,
+        ip.as_deref(),
+        ua.as_deref(),
     )
     .await;
 
@@ -701,5 +737,40 @@ mod tests {
         let err =
             validate_confirm_token(&headers, "secret", "any.action", Uuid::now_v7()).unwrap_err();
         assert!(matches!(err, AppError::Forbidden));
+    }
+
+    // ── extract_client_info ───────────────────────────────────────────────────
+
+    #[test]
+    fn extract_client_info_parses_forwarded_for_and_ua() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.5, 10.0.0.1".parse().unwrap());
+        headers.insert("user-agent", "Mozilla/5.0".parse().unwrap());
+
+        let (ip, ua) = extract_client_info(&headers);
+        assert_eq!(
+            ip.as_deref(),
+            Some("203.0.113.5"),
+            "first XFF entry expected"
+        );
+        assert_eq!(ua.as_deref(), Some("Mozilla/5.0"));
+    }
+
+    #[test]
+    fn extract_client_info_returns_none_when_headers_absent() {
+        let headers = HeaderMap::new();
+        let (ip, ua) = extract_client_info(&headers);
+        assert!(ip.is_none(), "ip must be None without x-forwarded-for");
+        assert!(ua.is_none(), "ua must be None without user-agent");
+    }
+
+    #[test]
+    fn extract_client_info_single_forwarded_for_entry() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.42".parse().unwrap());
+
+        let (ip, ua) = extract_client_info(&headers);
+        assert_eq!(ip.as_deref(), Some("198.51.100.42"));
+        assert!(ua.is_none());
     }
 }

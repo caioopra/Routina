@@ -80,7 +80,7 @@ function RateLimitDialog({ user, onClose }) {
       <StepUpModal
         open={stepUpOpen}
         onClose={() => setStepUpOpen(false)}
-        action="users.rate_limit"
+        action="admin.user.rate_limit"
         onSuccess={handleStepUpConfirm}
       />
       <div

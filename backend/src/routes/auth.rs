@@ -66,12 +66,60 @@ pub struct MeResponse {
 
 async fn register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<CreateUser>,
-) -> Result<Json<AuthResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     if body.password.len() < 8 {
         return Err(AppError::Validation(
             "password must be at least 8 characters".into(),
         ));
+    }
+
+    // Rate-limit registration attempts by normalized email address.
+    //
+    // This prevents resource-exhaustion attacks (unlimited account creation).
+    // Uses a dedicated `register_rate_limit` bucket (separate from the login
+    // bucket) so the login rate-limit tests are not affected by registrations.
+    let normalized_email = body.email.trim().to_lowercase();
+
+    if let Err(retry_after) = state
+        .register_rate_limit
+        .check_and_record(&normalized_email)
+    {
+        let ip: Option<String> = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(',').next().unwrap_or(s).trim().to_owned());
+
+        // Fire-and-forget audit of the rate-limited registration attempt.
+        let pool = state.pool.clone();
+        let email_clone = normalized_email.clone();
+        let ip_clone = ip.clone();
+        tokio::spawn(async move {
+            let _ = crate::middleware::emit_audit(
+                &pool,
+                None,
+                &email_clone,
+                "auth.register.rate_limited",
+                Some("email"),
+                Some(&email_clone),
+                None,
+                ip_clone.as_deref(),
+                None,
+            )
+            .await;
+        });
+
+        let body = json!({
+            "error": "rate_limited",
+            "retry_after_seconds": retry_after,
+        });
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after.to_string())],
+            Json(body),
+        )
+            .into_response());
     }
 
     let password_hash = hash_password(&body.password)?;
@@ -108,7 +156,8 @@ async fn register(
         user: UserPublic::from(user),
         token,
         refresh_token,
-    }))
+    })
+    .into_response())
 }
 
 async fn login(
