@@ -674,6 +674,7 @@ export const handlers = [
       name: user.name,
       planner_context: user.planner_context,
       preferences: {},
+      role: mockUserRole,
     });
   }),
 ];

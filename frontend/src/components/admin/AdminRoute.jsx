@@ -1,9 +1,8 @@
 import { Navigate } from "react-router-dom";
-import { useAuth } from "../../stores/authStore";
-import useAuthStore from "../../stores/authStore";
+import { useAuthStore } from "../../stores/authStore";
 
 export default function AdminRoute({ children }) {
-  const { isAuthenticated } = useAuth();
+  const isAuthenticated = useAuthStore((s) => !!s.token);
   const role = useAuthStore((s) => s.role);
 
   if (!isAuthenticated) {
