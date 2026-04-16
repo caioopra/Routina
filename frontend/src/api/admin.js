@@ -83,13 +83,18 @@ export async function getConfirmToken(password, action) {
 /**
  * setUserRateLimit — override rate limits for a specific user.
  * @param {string} userId
- * @param {{ requests_per_hour?: number, tokens_per_day?: number }} limits
+ * @param {{ daily_token_limit?: number, daily_request_limit?: number, override_reason?: string }} limits
+ * @param {string} [confirmToken]
  * @returns {object}
  */
-export async function setUserRateLimit(userId, limits) {
+export async function setUserRateLimit(userId, limits, confirmToken) {
+  const headers = confirmToken
+    ? { "x-confirm-token": confirmToken }
+    : undefined;
   const { data } = await apiClient.post(
     `/admin/users/${userId}/rate-limit`,
     limits,
+    headers ? { headers } : undefined,
   );
   return data;
 }

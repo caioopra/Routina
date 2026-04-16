@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getUsers, setUserRateLimit } from "../../api/admin";
+import StepUpModal from "../../components/admin/StepUpModal";
 
 function formatDate(iso) {
   if (!iso) return "—";
@@ -34,9 +35,10 @@ function RateLimitDialog({ user, onClose }) {
   });
   const [submitError, setSubmitError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
 
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (confirmToken) => {
       const limits = {};
       if (form.daily_token_limit !== "")
         limits.daily_token_limit = Number(form.daily_token_limit);
@@ -44,7 +46,7 @@ function RateLimitDialog({ user, onClose }) {
         limits.daily_request_limit = Number(form.daily_request_limit);
       if (form.override_reason !== "")
         limits.override_reason = form.override_reason;
-      return setUserRateLimit(user.id, limits);
+      return setUserRateLimit(user.id, limits, confirmToken);
     },
     onSuccess: () => {
       setSuccess(true);
@@ -66,138 +68,154 @@ function RateLimitDialog({ user, onClose }) {
   function handleSubmit(e) {
     e.preventDefault();
     setSubmitError("");
-    mutation.mutate();
+    setStepUpOpen(true);
+  }
+
+  function handleStepUpConfirm(confirmToken) {
+    mutation.mutate(confirmToken);
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ backgroundColor: "rgba(30,24,54,0.80)" }}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="ratelimit-title"
-    >
-      <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
-      <div className="relative w-full max-w-sm rounded-xl border border-purple-500/30 bg-[#161227] p-6 shadow-xl">
-        <h2
-          id="ratelimit-title"
-          className="mb-1 text-lg font-bold tracking-tight text-[#f1eff8]"
-          style={{ fontFamily: "Outfit, sans-serif" }}
-        >
-          Set Rate Limit
-        </h2>
-        <p className="mb-4 text-sm text-neutral-400">
-          Override rate limits for{" "}
-          <span className="text-[#f1eff8]">{user.email}</span>
-        </p>
+    <>
+      <StepUpModal
+        open={stepUpOpen}
+        onClose={() => setStepUpOpen(false)}
+        action="users.rate_limit"
+        onSuccess={handleStepUpConfirm}
+      />
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center"
+        style={{ backgroundColor: "rgba(30,24,54,0.80)" }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ratelimit-title"
+      >
+        <div
+          className="absolute inset-0"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+        <div className="relative w-full max-w-sm rounded-xl border border-purple-500/30 bg-[#161227] p-6 shadow-xl">
+          <h2
+            id="ratelimit-title"
+            className="mb-1 text-lg font-bold tracking-tight text-[#f1eff8]"
+            style={{ fontFamily: "Outfit, sans-serif" }}
+          >
+            Set Rate Limit
+          </h2>
+          <p className="mb-4 text-sm text-neutral-400">
+            Override rate limits for{" "}
+            <span className="text-[#f1eff8]">{user.email}</span>
+          </p>
 
-        {success ? (
-          <div className="space-y-4">
-            <p className="text-sm text-green-400">Rate limit updated.</p>
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-500"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} noValidate>
-            <div className="space-y-3">
-              <div>
-                <label
-                  htmlFor="daily-token-limit"
-                  className="mb-1 block text-xs font-medium uppercase tracking-widest text-purple-300/70"
+          {success ? (
+            <div className="space-y-4">
+              <p className="text-sm text-green-400">Rate limit updated.</p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-500"
                 >
-                  Daily Token Limit
-                </label>
-                <input
-                  id="daily-token-limit"
-                  type="number"
-                  min="0"
-                  value={form.daily_token_limit}
-                  onChange={(e) =>
-                    handleChange("daily_token_limit", e.target.value)
-                  }
-                  placeholder="e.g. 100000"
-                  className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="daily-request-limit"
-                  className="mb-1 block text-xs font-medium uppercase tracking-widest text-purple-300/70"
-                >
-                  Daily Request Limit
-                </label>
-                <input
-                  id="daily-request-limit"
-                  type="number"
-                  min="0"
-                  value={form.daily_request_limit}
-                  onChange={(e) =>
-                    handleChange("daily_request_limit", e.target.value)
-                  }
-                  placeholder="e.g. 50"
-                  className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="override-reason"
-                  className="mb-1 block text-xs font-medium uppercase tracking-widest text-purple-300/70"
-                >
-                  Override Reason
-                </label>
-                <input
-                  id="override-reason"
-                  type="text"
-                  value={form.override_reason}
-                  onChange={(e) =>
-                    handleChange("override_reason", e.target.value)
-                  }
-                  placeholder="e.g. Beta tester exception"
-                  className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
-                />
+                  Close
+                </button>
               </div>
             </div>
+          ) : (
+            <form onSubmit={handleSubmit} noValidate>
+              <div className="space-y-3">
+                <div>
+                  <label
+                    htmlFor="daily-token-limit"
+                    className="mb-1 block text-xs font-medium uppercase tracking-widest text-purple-300/70"
+                  >
+                    Daily Token Limit
+                  </label>
+                  <input
+                    id="daily-token-limit"
+                    type="number"
+                    min="0"
+                    value={form.daily_token_limit}
+                    onChange={(e) =>
+                      handleChange("daily_token_limit", e.target.value)
+                    }
+                    placeholder="e.g. 100000"
+                    className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
+                  />
+                </div>
 
-            {submitError && (
-              <p
-                role="alert"
-                className="mt-3 rounded-lg border border-red-500/30 bg-red-900/20 px-3 py-2 text-sm text-red-400"
-              >
-                {submitError}
-              </p>
-            )}
+                <div>
+                  <label
+                    htmlFor="daily-request-limit"
+                    className="mb-1 block text-xs font-medium uppercase tracking-widest text-purple-300/70"
+                  >
+                    Daily Request Limit
+                  </label>
+                  <input
+                    id="daily-request-limit"
+                    type="number"
+                    min="0"
+                    value={form.daily_request_limit}
+                    onChange={(e) =>
+                      handleChange("daily_request_limit", e.target.value)
+                    }
+                    placeholder="e.g. 50"
+                    className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
+                  />
+                </div>
 
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={mutation.isPending}
-                className="rounded-lg px-4 py-2 text-sm text-neutral-400 hover:text-[#f1eff8] disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={mutation.isPending}
-                className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
-                style={{ boxShadow: "0 0 8px 0 rgba(139,92,246,0.40)" }}
-              >
-                {mutation.isPending ? "Saving…" : "Apply"}
-              </button>
-            </div>
-          </form>
-        )}
+                <div>
+                  <label
+                    htmlFor="override-reason"
+                    className="mb-1 block text-xs font-medium uppercase tracking-widest text-purple-300/70"
+                  >
+                    Override Reason
+                  </label>
+                  <input
+                    id="override-reason"
+                    type="text"
+                    value={form.override_reason}
+                    onChange={(e) =>
+                      handleChange("override_reason", e.target.value)
+                    }
+                    placeholder="e.g. Beta tester exception"
+                    className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
+                  />
+                </div>
+              </div>
+
+              {submitError && (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg border border-red-500/30 bg-red-900/20 px-3 py-2 text-sm text-red-400"
+                >
+                  {submitError}
+                </p>
+              )}
+
+              <div className="mt-5 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={mutation.isPending}
+                  className="rounded-lg px-4 py-2 text-sm text-neutral-400 hover:text-[#f1eff8] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={mutation.isPending}
+                  className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-500 disabled:opacity-50"
+                  style={{ boxShadow: "0 0 8px 0 rgba(139,92,246,0.40)" }}
+                >
+                  {mutation.isPending ? "Saving…" : "Apply"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

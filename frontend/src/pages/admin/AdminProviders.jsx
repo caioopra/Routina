@@ -87,6 +87,12 @@ export default function AdminProviders() {
     },
   });
 
+  const hasChanges = settings
+    ? LLM_SETTINGS.some(
+        ({ key }) => form[key] !== getSettingValue(settings, key),
+      )
+    : false;
+
   function handleSave(e) {
     e.preventDefault();
     setSaveError("");
@@ -201,7 +207,7 @@ export default function AdminProviders() {
               <div className="mt-5 flex justify-end">
                 <button
                   type="submit"
-                  disabled={mutation.isPending}
+                  disabled={mutation.isPending || !hasChanges}
                   className="rounded-lg bg-purple-600 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:opacity-50"
                   style={{ boxShadow: "0 0 8px 0 rgba(139,92,246,0.40)" }}
                 >

@@ -1,9 +1,10 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { resetMockState, setMockUserRole } from "../../test/mocks/handlers";
 import { useAuthStore } from "../../stores/authStore";
+import * as adminApi from "../../api/admin";
 import KillSwitchToggle from "./KillSwitchToggle";
 
 function makeClient() {
@@ -37,6 +38,10 @@ beforeEach(() => {
     refreshToken: "refresh-1",
     role: "admin",
   });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("KillSwitchToggle", () => {
@@ -94,6 +99,34 @@ describe("KillSwitchToggle", () => {
     // Modal should close after success
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("reads current settings value inside mutationFn — not stale closure", async () => {
+    // This test verifies that the mutationFn computes next value from settings
+    // prop at call time, not from the value captured at render time.
+    const updateSettingSpy = vi
+      .spyOn(adminApi, "updateSetting")
+      .mockResolvedValue({
+        key: "chat_enabled",
+        value: "false",
+        updated_at: "",
+      });
+
+    const user = userEvent.setup();
+    // Render with enabled=true settings
+    renderToggle(enabledSettings);
+
+    await user.click(screen.getByRole("button", { name: /disable chat/i }));
+    await user.type(screen.getByLabelText(/password/i), "adminpassword");
+    await user.click(screen.getByRole("button", { name: /^confirm$/i }));
+
+    await waitFor(() => {
+      expect(updateSettingSpy).toHaveBeenCalledWith(
+        "chat_enabled",
+        "false",
+        "mock-confirm-token",
+      );
     });
   });
 });

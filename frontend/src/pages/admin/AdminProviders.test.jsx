@@ -66,14 +66,36 @@ describe("AdminProviders", () => {
     expect(screen.getByText(/chat is/i)).toBeInTheDocument();
   });
 
-  it("opens step-up modal when Save Settings is clicked", async () => {
-    const user = userEvent.setup();
+  it("Save Settings button is disabled when no settings have changed", async () => {
     renderProviders();
 
-    // Wait for the form to load
     const saveBtn = await screen.findByRole("button", {
       name: /save settings/i,
     });
+    expect(saveBtn).toBeDisabled();
+  });
+
+  it("Save Settings button is enabled after a setting is changed", async () => {
+    const user = userEvent.setup();
+    renderProviders();
+
+    // Wait for the form to load, then change a field
+    const providerSelect = await screen.findByLabelText(/default provider/i);
+    await user.selectOptions(providerSelect, "claude");
+
+    const saveBtn = screen.getByRole("button", { name: /save settings/i });
+    expect(saveBtn).not.toBeDisabled();
+  });
+
+  it("opens step-up modal when Save Settings is clicked after a change", async () => {
+    const user = userEvent.setup();
+    renderProviders();
+
+    // Wait for the form to load and make a change to enable the button
+    const providerSelect = await screen.findByLabelText(/default provider/i);
+    await user.selectOptions(providerSelect, "claude");
+
+    const saveBtn = screen.getByRole("button", { name: /save settings/i });
     await user.click(saveBtn);
 
     // StepUpModal should open

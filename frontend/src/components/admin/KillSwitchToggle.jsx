@@ -16,11 +16,13 @@ export default function KillSwitchToggle({ settings }) {
 
   const entry = settings?.find((s) => s.key === "chat_enabled");
   const enabled = entry?.value === "true";
-  const nextValue = enabled ? "false" : "true";
 
   const mutation = useMutation({
-    mutationFn: ({ confirmToken }) =>
-      updateSetting("chat_enabled", nextValue, confirmToken),
+    mutationFn: ({ confirmToken }) => {
+      const currentEntry = settings?.find((s) => s.key === "chat_enabled");
+      const next = currentEntry?.value === "true" ? "false" : "true";
+      return updateSetting("chat_enabled", next, confirmToken);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "settings"] });
     },

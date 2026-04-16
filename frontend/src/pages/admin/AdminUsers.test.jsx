@@ -116,7 +116,27 @@ describe("AdminUsers", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("submits rate limit form and shows success", async () => {
+  it("opens step-up modal when Apply is clicked in rate limit dialog", async () => {
+    const user = userEvent.setup();
+    renderUsers();
+
+    await screen.findByText("admin@test.com");
+    const [firstBtn] = screen.getAllByRole("button", {
+      name: /set rate limit/i,
+    });
+    await user.click(firstBtn);
+
+    // Fill in a value and click Apply
+    await user.type(screen.getByLabelText(/daily token limit/i), "50000");
+    await user.click(screen.getByRole("button", { name: /apply/i }));
+
+    // StepUpModal should open for step-up auth
+    expect(
+      screen.getByRole("heading", { name: /confirm identity/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("submits rate limit form after step-up confirmation and shows success", async () => {
     const user = userEvent.setup();
     renderUsers();
 
@@ -128,6 +148,10 @@ describe("AdminUsers", () => {
 
     await user.type(screen.getByLabelText(/daily token limit/i), "50000");
     await user.click(screen.getByRole("button", { name: /apply/i }));
+
+    // Complete step-up auth
+    await user.type(screen.getByLabelText(/password/i), "adminpassword");
+    await user.click(screen.getByRole("button", { name: /^confirm$/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/rate limit updated/i)).toBeInTheDocument();

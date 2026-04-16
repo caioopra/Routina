@@ -36,9 +36,11 @@ export default function AdminAudit() {
   const [entries, setEntries] = useState([]);
   const [cursor, setCursor] = useState(undefined);
   const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState("");
 
   // Primary query — fetches first page or filtered results
-  const { isLoading, isError, refetch, isFetching } = useQuery({
+  const { isLoading, isError, refetch } = useQuery({
     queryKey: ["admin", "audit", filterAction],
     queryFn: async () => {
       const params = { limit: PAGE_SIZE };
@@ -53,13 +55,25 @@ export default function AdminAudit() {
   });
 
   async function loadMore() {
-    const params = { limit: PAGE_SIZE };
-    if (cursor) params.before = cursor;
-    if (filterAction) params.action = filterAction;
-    const data = await getAuditLog(params);
-    setEntries((prev) => [...prev, ...data]);
-    setCursor(data.length > 0 ? data[data.length - 1].id : cursor);
-    setHasMore(data.length >= PAGE_SIZE);
+    setIsLoadingMore(true);
+    setLoadMoreError("");
+    try {
+      const params = { limit: PAGE_SIZE };
+      if (cursor) params.before = cursor;
+      if (filterAction) params.action = filterAction;
+      const data = await getAuditLog(params);
+      setEntries((prev) => [...prev, ...data]);
+      setCursor(data.length > 0 ? data[data.length - 1].id : cursor);
+      setHasMore(data.length >= PAGE_SIZE);
+    } catch (err) {
+      setLoadMoreError(
+        err?.response?.data?.error ??
+          err?.message ??
+          "Failed to load more entries",
+      );
+    } finally {
+      setIsLoadingMore(false);
+    }
   }
 
   function handleFilterChange(e) {
@@ -158,14 +172,22 @@ export default function AdminAudit() {
           )}
 
           {entries.length > 0 && hasMore && (
-            <div className="flex justify-center pt-2">
+            <div className="flex flex-col items-center gap-2 pt-2">
+              {loadMoreError && (
+                <p
+                  role="alert"
+                  className="rounded-lg border border-red-500/30 bg-red-900/20 px-3 py-2 text-sm text-red-400"
+                >
+                  {loadMoreError}
+                </p>
+              )}
               <button
                 type="button"
                 onClick={loadMore}
-                disabled={isFetching}
+                disabled={isLoadingMore}
                 className="rounded-lg border border-purple-500/30 px-5 py-2 text-sm text-purple-300 transition-colors hover:border-purple-400 hover:text-purple-200 disabled:opacity-50"
               >
-                {isFetching ? "Loading…" : "Load more"}
+                {isLoadingMore ? "Loading…" : "Load more"}
               </button>
             </div>
           )}

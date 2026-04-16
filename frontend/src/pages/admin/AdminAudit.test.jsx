@@ -2,9 +2,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { resetMockState, setMockUserRole } from "../../test/mocks/handlers";
 import { useAuthStore } from "../../stores/authStore";
+import * as adminApi from "../../api/admin";
 import AdminAudit from "./AdminAudit";
 
 function makeClient() {
@@ -32,6 +33,10 @@ beforeEach(() => {
     refreshToken: "refresh-1",
     role: "admin",
   });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("AdminAudit", () => {
@@ -78,15 +83,49 @@ describe("AdminAudit", () => {
   });
 
   it("shows error alert when audit log fails to load", async () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     setMockUserRole("user");
 
     renderAudit();
 
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/failed to load audit log/i)).toBeInTheDocument();
+  });
 
-    consoleSpy.mockRestore();
+  it("shows load-more error message when loadMore fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Spy on getAuditLog: first call succeeds with PAGE_SIZE entries, second call rejects
+    let callCount = 0;
+    vi.spyOn(adminApi, "getAuditLog").mockImplementation(async (params) => {
+      callCount += 1;
+      if (callCount === 1) {
+        // Return exactly PAGE_SIZE entries to trigger "Load more"
+        return Array.from({ length: 20 }, (_, i) => ({
+          id: `audit-${i + 1}`,
+          actor_email: "admin@test.com",
+          action: "setting.update",
+          target_type: "setting",
+          target_id: `key-${i}`,
+          payload: {},
+          created_at: "2026-04-01T12:00:00Z",
+        }));
+      }
+      throw new Error("Network error");
+    });
+
+    const user = userEvent.setup();
+    renderAudit();
+
+    // Wait for entries and the Load more button to appear
+    const loadMoreBtn = await screen.findByRole("button", {
+      name: /load more/i,
+    });
+    await user.click(loadMoreBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText(/network error/i)).toBeInTheDocument();
+    });
   });
 
   it("filters entries when the action filter is updated", async () => {
