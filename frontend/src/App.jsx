@@ -10,6 +10,9 @@ import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
 import AdminRoute from "./components/admin/AdminRoute.jsx";
 import AdminShell from "./components/admin/AdminShell.jsx";
 import AdminDashboard from "./pages/admin/AdminDashboard.jsx";
+import AdminProviders from "./pages/admin/AdminProviders.jsx";
+import AdminUsers from "./pages/admin/AdminUsers.jsx";
+import AdminAudit from "./pages/admin/AdminAudit.jsx";
 import { useAuthStore } from "./stores/authStore.js";
 
 const queryClient = new QueryClient({
@@ -83,12 +86,9 @@ export default function App() {
           >
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<AdminDashboard />} />
-            <Route
-              path="providers"
-              element={<div>Providers — coming soon</div>}
-            />
-            <Route path="users" element={<div>Users — coming soon</div>} />
-            <Route path="audit" element={<div>Audit — coming soon</div>} />
+            <Route path="providers" element={<AdminProviders />} />
+            <Route path="users" element={<AdminUsers />} />
+            <Route path="audit" element={<AdminAudit />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
