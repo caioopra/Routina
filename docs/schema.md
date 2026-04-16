@@ -272,6 +272,61 @@ Every tool-driven mutation writes one `routine_actions` row with `payload_before
 
 Scoping undo to `conversation_id` prevents an `undo` in a new chat session from accidentally reversing an action taken in an older session.
 
+### `llm_usage_daily`
+
+Daily rollup of LLM token consumption per user/provider/model. Written via upsert after every LLM assistant turn. The composite primary key enables idempotent increment-on-conflict updates.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| day | DATE | Rollup date (UTC) |
+| user_id | UUID FK→users CASCADE | Owner |
+| provider | TEXT | `'gemini'` or `'claude'` |
+| model | TEXT | Exact model string, e.g. `'gemini-2.5-flash-preview-05-20'` |
+| input_tokens | BIGINT NOT NULL DEFAULT 0 | Cumulative prompt tokens for the day |
+| output_tokens | BIGINT NOT NULL DEFAULT 0 | Cumulative completion tokens for the day |
+| request_count | INT NOT NULL DEFAULT 0 | Number of LLM calls that day |
+| estimated_cost_usd | NUMERIC(10,6) NOT NULL DEFAULT 0 | Running cost estimate |
+
+**Primary key:** `(day, user_id, provider, model)`
+
+**Indexes:** `(user_id, day DESC)` — per-user day-range queries and the admin metrics endpoint
+
+### `app_settings`
+
+Flat key-value store for runtime configuration values that admins can update without a code deploy (default provider, model names, budget caps, feature flags). Seeded with defaults at migration time using `ON CONFLICT DO NOTHING` so re-running migrations does not overwrite admin-edited values.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| key | TEXT PK | Setting name, e.g. `'llm_default_provider'` |
+| value | TEXT NOT NULL | Setting value (always stored as text; parsed by the application) |
+| updated_by | UUID FK→users SET NULL | Admin who last changed this value; NULL for seed rows |
+| updated_at | TIMESTAMPTZ NOT NULL | Auto-set to `now()` on insert; application must update explicitly |
+
+**Default seed values:**
+
+| key | value |
+|-----|-------|
+| `llm_default_provider` | `gemini` |
+| `llm_gemini_model` | `gemini-2.5-flash-preview-05-20` |
+| `llm_claude_model` | `claude-sonnet-4-20250514` |
+| `budget_monthly_usd` | `5.00` |
+| `budget_warn_pct` | `80` |
+| `chat_enabled` | `true` |
+
+### `user_rate_limits`
+
+Per-user overrides for daily LLM token and request limits. One-to-one extension of `users`. When a row is absent for a user the application falls back to the global limits in `app_settings`. Both limit columns are nullable — NULL means "no limit enforced at this dimension".
+
+| Column | Type | Notes |
+|--------|------|-------|
+| user_id | UUID PK FK→users CASCADE | One row per user |
+| daily_token_limit | BIGINT | Nullable; overrides global token limit when set |
+| daily_request_limit | INT | Nullable; overrides global request cap when set |
+| override_reason | TEXT | Optional free-text explanation for auditing |
+| set_by | UUID FK→users SET NULL | Admin who wrote this row; SET NULL on admin deletion |
+| created_at | TIMESTAMPTZ NOT NULL | |
+| updated_at | TIMESTAMPTZ NOT NULL | |
+
 ## Relationships Diagram
 
 ```
@@ -285,6 +340,9 @@ users ──┬── routines ──┬── blocks ──┬── subtasks
         ├── conversations ── messages
         ├── routine_actions ──┬── routines
         │                     └── conversations (nullable)
-        └── audit_log (actor_id → users SET NULL,
-                       impersonating → users SET NULL)
+        ├── audit_log (actor_id → users SET NULL,
+        │              impersonating → users SET NULL)
+        ├── llm_usage_daily
+        ├── app_settings (updated_by → users SET NULL)
+        └── user_rate_limits (set_by → users SET NULL)
 ```
