@@ -24,6 +24,8 @@ let chatMessageCounter = 0;
 
 let providersState = { available: ["gemini", "claude"], selected: "gemini" };
 
+let mockUserRole = "user";
+
 export function seedRoutines(initial) {
   routines = initial.map((r) => ({ ...r }));
   routineCounter = routines.length;
@@ -62,6 +64,10 @@ export function seedChatMessages(initial) {
   chatMessageCounter = chatMessages.length;
 }
 
+export function setMockUserRole(role) {
+  mockUserRole = role;
+}
+
 export function resetMockState() {
   users = new Map();
   tokenCounter = 0;
@@ -79,6 +85,7 @@ export function resetMockState() {
   chatMessages = [];
   chatMessageCounter = 0;
   providersState = { available: ["gemini", "claude"], selected: "gemini" };
+  mockUserRole = "user";
 }
 
 function requireAuth(request) {
@@ -262,6 +269,7 @@ export const handlers = [
       id: user.id,
       email: user.email,
       name: user.name,
+      role: mockUserRole,
       planner_context: user.planner_context ?? null,
       preferences: {},
     });
@@ -666,6 +674,7 @@ export const handlers = [
       name: user.name,
       planner_context: user.planner_context,
       preferences: {},
+      role: mockUserRole,
     });
   }),
 ];

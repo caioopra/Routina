@@ -24,6 +24,7 @@ pub struct MeResponse {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    pub role: String,
     pub planner_context: Option<String>,
     pub preferences: serde_json::Value,
 }
@@ -45,7 +46,7 @@ async fn update_planner_context(
         "UPDATE users \
          SET planner_context = $1, updated_at = now() \
          WHERE id = $2 \
-         RETURNING id, email, name, planner_context, preferences",
+         RETURNING id, email, name, role, planner_context, preferences",
         new_ctx,
         user.id,
     )
@@ -57,6 +58,7 @@ async fn update_planner_context(
         id: row.id,
         email: row.email,
         name: row.name,
+        role: row.role,
         planner_context: row.planner_context,
         preferences: row.preferences,
     }))
