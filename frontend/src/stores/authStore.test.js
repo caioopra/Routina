@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useAuthStore } from "./authStore";
+import { setMockUserRole } from "../test/mocks/handlers";
 
 describe("authStore", () => {
   beforeEach(() => {
@@ -84,5 +85,51 @@ describe("authStore", () => {
       email: "a@b.com",
       name: "A",
     });
+  });
+
+  it("loadMe stores role from API response", async () => {
+    // Register a user so the /api/auth/me handler has someone to return
+    const { default: apiClient } = await import("../api/client");
+    const registerRes = await apiClient.post("/auth/register", {
+      email: "admin@test.com",
+      name: "Admin",
+      password: "password123",
+    });
+    useAuthStore.getState().setAuth({
+      user: registerRes.data.user,
+      token: registerRes.data.token,
+      refresh_token: registerRes.data.refresh_token,
+    });
+
+    // Default mock role is "user"
+    await useAuthStore.getState().loadMe();
+    expect(useAuthStore.getState().role).toBe("user");
+
+    // Switch mock role to "admin" and reload
+    setMockUserRole("admin");
+    await useAuthStore.getState().loadMe();
+    expect(useAuthStore.getState().role).toBe("admin");
+  });
+
+  it("role persists to localStorage after loadMe", async () => {
+    const { default: apiClient } = await import("../api/client");
+    const registerRes = await apiClient.post("/auth/register", {
+      email: "roletest@test.com",
+      name: "RoleUser",
+      password: "password123",
+    });
+    useAuthStore.getState().setAuth({
+      user: registerRes.data.user,
+      token: registerRes.data.token,
+      refresh_token: registerRes.data.refresh_token,
+    });
+
+    setMockUserRole("admin");
+    await useAuthStore.getState().loadMe();
+
+    const raw = localStorage.getItem("planner-auth");
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw);
+    expect(parsed.state.role).toBe("admin");
   });
 });

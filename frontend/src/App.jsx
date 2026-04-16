@@ -6,6 +6,8 @@ import Planner from "./Planner.jsx";
 import Routines from "./pages/Routines.jsx";
 import RoutineDetail from "./pages/RoutineDetail.jsx";
 import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
+import AdminRoute from "./components/admin/AdminRoute.jsx";
+import AdminDashboard from "./pages/AdminDashboard.jsx";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +47,14 @@ export default function App() {
               <ProtectedRoute>
                 <RoutineDetail />
               </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/dashboard"
+            element={
+              <AdminRoute>
+                <AdminDashboard />
+              </AdminRoute>
             }
           />
           <Route path="*" element={<Navigate to="/" replace />} />

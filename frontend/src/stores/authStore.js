@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { getProviders, setProvider } from "../api/settings";
+import { getMe } from "../api/me";
 
 export const useAuthStore = create(
   persist(
@@ -8,6 +9,7 @@ export const useAuthStore = create(
       user: null,
       token: null,
       refreshToken: null,
+      role: null,
       providers: { available: [], selected: null },
 
       setAuth: ({ user, token, refresh_token }) =>
@@ -23,8 +25,22 @@ export const useAuthStore = create(
           user: null,
           token: null,
           refreshToken: null,
+          role: null,
           providers: { available: [], selected: null },
         }),
+
+      /**
+       * loadMe — fetch the current user profile from the API and store it,
+       * including the role field. Safe to call multiple times.
+       */
+      loadMe: async () => {
+        try {
+          const data = await getMe();
+          set({ user: data, role: data.role ?? null });
+        } catch {
+          // Non-fatal; role will remain null
+        }
+      },
 
       /**
        * loadProviders — fetch available + selected providers from the API.
@@ -61,6 +77,7 @@ export const useAuthStore = create(
         token: state.token,
         refreshToken: state.refreshToken,
         user: state.user,
+        role: state.role,
       }),
     },
   ),
@@ -74,6 +91,11 @@ export const useAuth = () => {
     isAuthenticated: !!s.token,
     logout: s.logout,
   };
+};
+
+export const useIsAdmin = () => {
+  const role = useAuthStore((s) => s.role);
+  return role === "admin";
 };
 
 export default useAuthStore;
