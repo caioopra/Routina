@@ -25,25 +25,38 @@ function chatStatus(settings) {
 }
 
 export default function AdminDashboard() {
-  const { data: metrics, isLoading: metricsLoading } = useQuery({
+  const {
+    data: metrics,
+    isLoading: metricsLoading,
+    isError: metricsError,
+  } = useQuery({
     queryKey: ["admin", "metrics", "usage", 30],
     queryFn: () => getUsageMetrics(30),
     refetchInterval: 30_000,
   });
 
-  const { data: settings, isLoading: settingsLoading } = useQuery({
+  const {
+    data: settings,
+    isLoading: settingsLoading,
+    isError: settingsError,
+  } = useQuery({
     queryKey: ["admin", "settings"],
     queryFn: getSettings,
     refetchInterval: 30_000,
   });
 
-  const { data: users, isLoading: usersLoading } = useQuery({
+  const {
+    data: users,
+    isLoading: usersLoading,
+    isError: usersError,
+  } = useQuery({
     queryKey: ["admin", "users"],
     queryFn: getUsers,
     refetchInterval: 30_000,
   });
 
   const isLoading = metricsLoading || settingsLoading || usersLoading;
+  const hasError = metricsError || settingsError || usersError;
 
   return (
     <div>
@@ -53,6 +66,15 @@ export default function AdminDashboard() {
       >
         Dashboard
       </h1>
+
+      {hasError && (
+        <div
+          role="alert"
+          className="mb-4 rounded-lg border border-red-500/40 bg-red-900/20 px-4 py-3 text-sm text-red-400"
+        >
+          Failed to load dashboard data. Showing partial results.
+        </div>
+      )}
 
       {isLoading ? (
         <p className="font-mono text-sm text-purple-400">Loading metrics…</p>

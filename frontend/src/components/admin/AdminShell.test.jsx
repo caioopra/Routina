@@ -56,11 +56,21 @@ describe("AdminShell", () => {
     renderShell();
 
     const toggleBtn = screen.getByRole("button", { name: /toggle sidebar/i });
-    // Mobile sidebar overlay is not visible initially
-    expect(screen.queryByRole("complementary")).toBeTruthy(); // desktop aside exists
+
+    // Before opening: only the desktop sidebar nav is rendered
+    expect(
+      screen.getAllByRole("navigation", { name: /admin navigation/i }),
+    ).toHaveLength(1);
 
     await user.click(toggleBtn);
-    // After click, mobile overlay should open (we just verify no crash and the button works)
-    expect(toggleBtn).toBeInTheDocument();
+
+    // After opening: mobile overlay mounts a second AdminSidebar — two navs in the DOM
+    expect(
+      screen.getAllByRole("navigation", { name: /admin navigation/i }),
+    ).toHaveLength(2);
+
+    // All nav links are present in the overlay
+    const navLinks = screen.getAllByRole("link", { name: "Dashboard" });
+    expect(navLinks.length).toBeGreaterThanOrEqual(2);
   });
 });

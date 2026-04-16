@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import AdminDashboard from "./AdminDashboard";
 import { useAuthStore } from "../../stores/authStore";
 import { resetMockState, setMockUserRole } from "../../test/mocks/handlers";
@@ -82,5 +82,22 @@ describe("AdminDashboard", () => {
     renderDashboard();
     // chat_enabled is "true" → "Enabled"
     expect(await screen.findByText("Enabled")).toBeInTheDocument();
+  });
+
+  it("shows error banner when queries fail", async () => {
+    // Suppress console.error noise from React Query error logging in this test
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Non-admin role causes all three admin endpoints to return 403
+    setMockUserRole("user");
+
+    renderDashboard();
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.getByText(/failed to load dashboard data/i),
+    ).toBeInTheDocument();
+
+    consoleSpy.mockRestore();
   });
 });
