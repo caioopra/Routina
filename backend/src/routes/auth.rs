@@ -59,6 +59,7 @@ pub struct MeResponse {
     pub id: Uuid,
     pub email: String,
     pub name: String,
+    pub role: String,
     pub planner_context: Option<String>,
     pub preferences: serde_json::Value,
 }
@@ -207,6 +208,7 @@ async fn me(
         id: user.id,
         email: user.email,
         name: user.name,
+        role: user.role,
         planner_context: row.planner_context,
         preferences: row.preferences,
     }))
