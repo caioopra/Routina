@@ -189,7 +189,34 @@ Phase 3 introduces a single `role` column on `users` (CHECK-constrained to `'use
 - **Default:** every new user gets `role = 'user'` automatically; no application code needs to set it.
 - **Promotion:** an existing admin promotes another user by issuing `UPDATE users SET role = 'admin' WHERE id = $1`. A dedicated API endpoint (Phase 3 Slice B) wraps this with authorization checks.
 - **Partial index:** `users_role_idx` (added in migration 005) covers only the `role = 'admin'` rows. Because virtually all users are regular users the index stays tiny while making the admin-list query (`SELECT * FROM users WHERE role = 'admin'`) an index-only scan.
-- **Audit log:** a full action audit log (migration 006, Phase 3 Slice B) will record admin operations separately from the per-conversation `routine_actions` log.
+- **Audit log:** a full action audit log (migration 006, Phase 3 Slice B) records admin operations in the `audit_log` table, separately from the per-conversation `routine_actions` log.
+
+### `audit_log`
+
+Append-only record of admin-initiated operations. Written whenever an admin performs a privileged action (role promotion/demotion, user deletion, impersonation start/stop, etc.). Rows are never modified after insert — there is no `updated_at` column.
+
+Separate from `routine_actions`, which tracks LLM tool-driven routine mutations; `audit_log` covers the administrative control plane.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | `gen_random_uuid()` |
+| actor_id | UUID FK→users SET NULL | Admin who performed the action; SET NULL on user deletion so the row is preserved |
+| actor_email | TEXT NOT NULL | Denormalised email snapshot at write time; survives user deletion |
+| impersonating | UUID FK→users SET NULL | Non-NULL when the admin is acting as another user via impersonation |
+| action | TEXT NOT NULL | Short operation identifier, e.g. `'promote_user'`, `'demote_user'`, `'delete_user'`, `'impersonate_start'` |
+| target_type | TEXT | Entity kind affected, e.g. `'user'`, `'routine'`; nullable for system-level actions |
+| target_id | TEXT | Affected entity's id (TEXT to accommodate UUIDs and future non-UUID keys); nullable |
+| payload | JSONB | Arbitrary context — before/after values, extra metadata |
+| ip | INET | Client IP at write time (from `X-Forwarded-For` or socket address) |
+| user_agent | TEXT | Raw `User-Agent` header |
+| created_at | TIMESTAMPTZ NOT NULL | Immutable insert timestamp |
+
+**Indexes:**
+- `(actor_id, created_at DESC)` — per-actor activity view and forensic queries
+- `(action, created_at DESC)` — action-type breakdown on the admin dashboard
+- `(created_at DESC)` — bare index for the 90-day retention cleanup job (`DELETE FROM audit_log WHERE created_at < now() - INTERVAL '90 days'`); the composite indexes above are not used for this scan because their leading column does not match the predicate
+
+**Payload safety:** the application-layer `emit_audit` function must strip sensitive keys (`password`, `password_hash`, `token`, `refresh_token`, `secret`, `api_key`) from the JSONB payload before insert. Credentials must never appear in this table.
 
 ### `rules`
 Monthly rules/guidelines for a routine.
@@ -245,6 +272,67 @@ Every tool-driven mutation writes one `routine_actions` row with `payload_before
 
 Scoping undo to `conversation_id` prevents an `undo` in a new chat session from accidentally reversing an action taken in an older session.
 
+### `llm_usage_daily`
+
+Daily rollup of LLM token consumption per user/provider/model. Written via upsert after every LLM assistant turn. The composite primary key enables idempotent increment-on-conflict updates.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| day | DATE | Rollup date (UTC) |
+| user_id | UUID FK→users CASCADE | Owner |
+| provider | TEXT | `'gemini'` or `'claude'` |
+| model | TEXT | Exact model string, e.g. `'gemini-2.5-flash-preview-05-20'` |
+| input_tokens | BIGINT NOT NULL DEFAULT 0 | Cumulative prompt tokens for the day |
+| output_tokens | BIGINT NOT NULL DEFAULT 0 | Cumulative completion tokens for the day |
+| request_count | INT NOT NULL DEFAULT 0 | Number of LLM calls that day |
+| estimated_cost_usd | NUMERIC(10,6) NOT NULL DEFAULT 0 | Running cost estimate |
+
+**Primary key:** `(day, user_id, provider, model)`
+
+**Indexes:** `(user_id, day DESC)` — per-user day-range queries and the admin metrics endpoint
+
+### `app_settings`
+
+Flat key-value store for runtime configuration values that admins can update without a code deploy (default provider, model names, budget caps, feature flags). Seeded with defaults at migration time using `ON CONFLICT DO NOTHING` so re-running migrations does not overwrite admin-edited values.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| key | TEXT PK | Setting name; CHECK-constrained to the allowlist below |
+| value | TEXT NOT NULL | Setting value (always stored as text; parsed by the application); CHECK `char_length(value) <= 1024` |
+| updated_by | UUID FK→users SET NULL | Admin who last changed this value; NULL for seed rows |
+| updated_at | TIMESTAMPTZ NOT NULL | Auto-updated by `app_settings_set_updated_at` trigger |
+
+**Key allowlist (CHECK constraint):** `'llm_default_provider'`, `'llm_gemini_model'`, `'llm_claude_model'`, `'budget_monthly_usd'`, `'budget_warn_pct'`, `'chat_enabled'`.
+
+**Trigger:** `app_settings_set_updated_at` (BEFORE UPDATE) calls the shared `set_updated_at()` plpgsql function to keep `updated_at` current automatically.
+
+**Default seed values:**
+
+| key | value |
+|-----|-------|
+| `llm_default_provider` | `gemini` |
+| `llm_gemini_model` | `gemini-2.5-flash-preview-05-20` |
+| `llm_claude_model` | `claude-sonnet-4-20250514` |
+| `budget_monthly_usd` | `5.00` |
+| `budget_warn_pct` | `80` |
+| `chat_enabled` | `true` |
+
+### `user_rate_limits`
+
+Per-user overrides for daily LLM token and request limits. One-to-one extension of `users`. When a row is absent for a user the application falls back to the global limits in `app_settings`. Both limit columns are nullable — NULL means "no limit enforced at this dimension".
+
+| Column | Type | Notes |
+|--------|------|-------|
+| user_id | UUID PK FK→users CASCADE | One row per user |
+| daily_token_limit | BIGINT | Nullable; overrides global token limit when set |
+| daily_request_limit | INT | Nullable; overrides global request cap when set |
+| override_reason | TEXT | Optional free-text explanation for auditing |
+| set_by | UUID FK→users SET NULL | Admin who wrote this row; SET NULL on admin deletion |
+| created_at | TIMESTAMPTZ NOT NULL | |
+| updated_at | TIMESTAMPTZ NOT NULL | Auto-updated by `user_rate_limits_set_updated_at` trigger |
+
+**Trigger:** `user_rate_limits_set_updated_at` (BEFORE UPDATE) calls the shared `set_updated_at()` plpgsql function (defined in migration 007) to keep `updated_at` current automatically.
+
 ## Relationships Diagram
 
 ```
@@ -256,6 +344,11 @@ users ──┬── routines ──┬── blocks ──┬── subtasks
         ├── goals (self-referencing via parent_id)
         ├── events
         ├── conversations ── messages
-        └── routine_actions ──┬── routines
-                              └── conversations (nullable)
+        ├── routine_actions ──┬── routines
+        │                     └── conversations (nullable)
+        ├── audit_log (actor_id → users SET NULL,
+        │              impersonating → users SET NULL)
+        ├── llm_usage_daily
+        ├── app_settings (updated_by → users SET NULL)
+        └── user_rate_limits (set_by → users SET NULL)
 ```
