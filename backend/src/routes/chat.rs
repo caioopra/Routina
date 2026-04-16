@@ -64,6 +64,64 @@ fn sse_line(event: &str, data: &str) -> String {
     format!("event: {event}\ndata: {data}\n\n")
 }
 
+/// Return the set of argument keys that are safe to surface in SSE events for
+/// the given tool.  Any key not in this list is stripped before the
+/// `tool_call` event is emitted to the client.
+fn allowed_tool_args(tool_name: &str) -> &'static [&'static str] {
+    match tool_name {
+        "list_blocks" => &["routine_id", "day_of_week"],
+        "create_block" => &[
+            "routine_id",
+            "title",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "type",
+            "note",
+            "label_names",
+        ],
+        "update_block" => &[
+            "block_id",
+            "title",
+            "day_of_week",
+            "start_time",
+            "end_time",
+            "type",
+            "note",
+            "label_names",
+        ],
+        "delete_block" => &["block_id"],
+        "list_rules" => &[],
+        "create_rule" => &["title", "description", "priority"],
+        "update_rule" => &["rule_id", "title", "description", "priority"],
+        "delete_rule" => &["rule_id"],
+        "list_labels" => &[],
+        "create_label" => &["name", "color_bg", "color_text", "color_border", "icon"],
+        "update_label" => &["label_id", "name"],
+        "delete_label" => &["label_id"],
+        "undo_last_action" => &[],
+        _ => &[],
+    }
+}
+
+/// Filter `args` to only the keys permitted by `allowed_tool_args`.
+///
+/// Non-object values are returned unchanged.
+fn filter_tool_args(tool_name: &str, args: &serde_json::Value) -> serde_json::Value {
+    let allowed = allowed_tool_args(tool_name);
+    match args {
+        serde_json::Value::Object(map) => {
+            let filtered: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .filter(|(k, _)| allowed.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            serde_json::Value::Object(filtered)
+        }
+        other => other.clone(),
+    }
+}
+
 async fn send_message(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -80,6 +138,10 @@ async fn send_message(
         conversation_id = field::Empty,
         routine_id = field::Empty,
         provider = field::Empty,
+        input_tokens = field::Empty,
+        output_tokens = field::Empty,
+        estimated_cost_usd = field::Empty,
+        model = field::Empty,
     );
     let _turn_guard = turn_span.enter();
 
@@ -315,6 +377,9 @@ async fn send_message(
     let pool = state.pool.clone();
 
     let user_id = user.id;
+    // Clone the turn span so we can record final token/cost fields from inside
+    // the stream closure (where Span::current() is a different span context).
+    let turn_span_for_stream = turn_span.clone();
 
     let stream_body = async_stream::stream! {
         // Hold the per-user semaphore permit for the full duration of the stream
@@ -344,6 +409,8 @@ async fn send_message(
                 "chat.round",
                 round = round,
                 finish_reason = field::Empty,
+                input_tokens = field::Empty,
+                output_tokens = field::Empty,
             );
             let _round_guard = round_span.enter();
 
@@ -401,8 +468,12 @@ async fn send_message(
                 }
             }
 
-            // Record finish_reason into the round span.
+            // Record finish_reason and per-round token usage into the round span.
             Span::current().record("finish_reason", format!("{finish_reason:?}").as_str());
+            if let Some(ru) = round_usage {
+                round_span.record("input_tokens", ru.input_tokens);
+                round_span.record("output_tokens", ru.output_tokens);
+            }
 
             // Persist the assistant message for this round.
             let asst_msg_id = Uuid::now_v7();
@@ -461,12 +532,13 @@ async fn send_message(
 
             for tc in &accumulated_tool_calls {
                 // Emit tool_call event so the frontend can show progress.
+                // Only surface args that are on the per-tool allowlist.
                 yield Ok(sse_line(
                     "tool_call",
                     &json!({
                         "id":   tc.id,
                         "name": tc.name,
-                        "args": tc.args
+                        "args": filter_tool_args(&tc.name, &tc.args)
                     })
                     .to_string(),
                 ));
@@ -582,6 +654,15 @@ async fn send_message(
             }
         }
 
+        // ── Record accumulated token/cost/model fields into the turn span ───
+        if let Some(ref u) = total_usage {
+            turn_span_for_stream.record("input_tokens", u.input_tokens);
+            turn_span_for_stream.record("output_tokens", u.output_tokens);
+            let cost = estimate_cost_usd(&provider_name, &model_name, u.input_tokens, u.output_tokens);
+            turn_span_for_stream.record("estimated_cost_usd", cost);
+        }
+        turn_span_for_stream.record("model", model_name.as_str());
+
         if had_error {
             // error_payload is already a JSON string (provider_error or tool_loop_limit_reached).
             yield Ok(sse_line("error", &error_payload));
@@ -619,6 +700,153 @@ async fn send_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── allowed_tool_args ─────────────────────────────────────────────────────
+
+    #[test]
+    fn allowed_tool_args_create_block_returns_expected_keys() {
+        let keys = allowed_tool_args("create_block");
+        assert!(keys.contains(&"routine_id"));
+        assert!(keys.contains(&"title"));
+        assert!(keys.contains(&"day_of_week"));
+        assert!(keys.contains(&"start_time"));
+        assert!(keys.contains(&"end_time"));
+        assert!(keys.contains(&"type"));
+        assert!(keys.contains(&"note"));
+        assert!(keys.contains(&"label_names"));
+        assert_eq!(keys.len(), 8);
+    }
+
+    #[test]
+    fn allowed_tool_args_update_block_includes_label_names() {
+        let keys = allowed_tool_args("update_block");
+        assert!(keys.contains(&"label_names"));
+        assert!(keys.contains(&"note"));
+        assert!(keys.contains(&"block_id"));
+    }
+
+    #[test]
+    fn allowed_tool_args_unknown_tool_returns_empty() {
+        let keys = allowed_tool_args("nonexistent_tool");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_list_labels_returns_empty() {
+        let keys = allowed_tool_args("list_labels");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_list_rules_returns_empty() {
+        let keys = allowed_tool_args("list_rules");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_create_rule_returns_expected_keys() {
+        let keys = allowed_tool_args("create_rule");
+        assert!(keys.contains(&"title"));
+        assert!(keys.contains(&"description"));
+        assert!(keys.contains(&"priority"));
+        assert_eq!(keys.len(), 3);
+    }
+
+    #[test]
+    fn allowed_tool_args_update_rule_returns_expected_keys() {
+        let keys = allowed_tool_args("update_rule");
+        assert!(keys.contains(&"rule_id"));
+        assert!(keys.contains(&"title"));
+        assert!(keys.contains(&"description"));
+        assert!(keys.contains(&"priority"));
+        assert_eq!(keys.len(), 4);
+    }
+
+    #[test]
+    fn allowed_tool_args_delete_rule_returns_rule_id() {
+        let keys = allowed_tool_args("delete_rule");
+        assert_eq!(keys, &["rule_id"]);
+    }
+
+    #[test]
+    fn allowed_tool_args_undo_last_action_returns_empty() {
+        let keys = allowed_tool_args("undo_last_action");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_set_block_labels_not_present() {
+        // set_block_labels does not exist in the executor; it must fall through
+        // to the wildcard and return an empty allowlist.
+        let keys = allowed_tool_args("set_block_labels");
+        assert!(keys.is_empty());
+    }
+
+    // ── filter_tool_args ──────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_tool_args_strips_unlisted_key() {
+        let args = serde_json::json!({
+            "block_id": "abc123",
+            "internal_secret": "should_be_stripped"
+        });
+        let filtered = filter_tool_args("delete_block", &args);
+        let obj = filtered.as_object().unwrap();
+        assert!(obj.contains_key("block_id"));
+        assert!(!obj.contains_key("internal_secret"));
+        assert_eq!(obj.len(), 1);
+    }
+
+    #[test]
+    fn filter_tool_args_preserves_all_allowed_keys() {
+        let args = serde_json::json!({
+            "routine_id": "r1",
+            "title": "Morning run",
+            "day_of_week": 1,
+            "start_time": "07:00",
+            "end_time": "08:00",
+            "type": "exercicio"
+        });
+        let filtered = filter_tool_args("create_block", &args);
+        let obj = filtered.as_object().unwrap();
+        assert_eq!(obj.len(), 6);
+        assert_eq!(obj["title"], "Morning run");
+        assert_eq!(obj["day_of_week"], 1);
+    }
+
+    #[test]
+    fn filter_tool_args_mixed_allowed_and_unlisted() {
+        let args = serde_json::json!({
+            "label_id": "lbl1",
+            "name": "Work",
+            "unlisted_field": "nope"
+        });
+        let filtered = filter_tool_args("update_label", &args);
+        let obj = filtered.as_object().unwrap();
+        assert!(obj.contains_key("label_id"));
+        assert!(obj.contains_key("name"));
+        assert!(!obj.contains_key("unlisted_field"));
+        assert_eq!(obj.len(), 2);
+    }
+
+    #[test]
+    fn filter_tool_args_non_object_returned_unchanged() {
+        let args = serde_json::json!([1, 2, 3]);
+        let filtered = filter_tool_args("create_block", &args);
+        assert_eq!(filtered, serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn filter_tool_args_empty_allowlist_strips_everything() {
+        let args = serde_json::json!({
+            "some_key": "some_value"
+        });
+        let filtered = filter_tool_args("list_labels", &args);
+        let obj = filtered.as_object().unwrap();
+        assert!(obj.is_empty());
+    }
+
+    // ── sse_line ──────────────────────────────────────────────────────────────
 
     #[test]
     fn sse_line_format() {

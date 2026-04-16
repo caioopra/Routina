@@ -12,10 +12,23 @@ async fn main() -> anyhow::Result<()> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    // Initialize tracing — use JSON format when LOG_FORMAT=json.
+    let env_filter = EnvFilter::from_default_env();
+    match std::env::var("LOG_FORMAT").as_deref() {
+        Ok("json") => {
+            tracing_subscriber::fmt()
+                .json()
+                .with_env_filter(env_filter)
+                .init();
+        }
+        _ => {
+            tracing_subscriber::fmt().with_env_filter(env_filter).init();
+        }
+    }
+    tracing::info!(
+        log_format = std::env::var("LOG_FORMAT").as_deref().unwrap_or("text"),
+        "structured logging initialized"
+    );
 
     // Load config
     let config = config::Config::from_env().expect("Missing required environment variables");
