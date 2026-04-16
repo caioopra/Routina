@@ -260,8 +260,16 @@ async fn chat_returns_429_when_budget_exceeded(pool: PgPool) {
         body["error"], "budget_exceeded",
         "error field must be budget_exceeded; got {body}"
     );
-    assert!(body["monthly_spend"].as_f64().unwrap() > 0.0);
-    assert!(body["budget"].as_f64().unwrap() > 0.0);
+    // Financial data (monthly_spend, budget) must NOT appear in the response
+    // to avoid leaking spend information in HTTP error bodies.
+    assert!(
+        body.get("monthly_spend").is_none(),
+        "monthly_spend must not appear in 429 response; got {body}"
+    );
+    assert!(
+        body.get("budget").is_none(),
+        "budget must not appear in 429 response; got {body}"
+    );
 }
 
 // ── budget_warning in done event ─────────────────────────────────────────────

@@ -101,21 +101,51 @@ async fn settings_list_requires_admin(pool: PgPool) {
 // ── POST /api/admin/settings ──────────────────────────────────────────────────
 
 #[sqlx::test(migrations = "./migrations")]
-async fn settings_update_non_sensitive_key_succeeds(pool: PgPool) {
+async fn settings_update_with_confirm_token_succeeds(pool: PgPool) {
     let app = build_app(pool.clone());
     let admin_email = "admin-settings-update@example.com";
     let token = login_token(&app, admin_email).await;
     promote_to_admin(&pool, admin_email).await;
 
-    // Update budget_warn_pct (not a sensitive key — no confirm token needed).
-    let (status, body) = json_oneshot(
+    // All settings keys are now sensitive (chat_enabled, budget_*, llm_*).
+    // Obtain a step-up confirm token first.
+    let (confirm_status, confirm_body) = json_oneshot(
         &app,
         Method::POST,
-        "/api/admin/settings",
-        Some(json!({ "key": "budget_warn_pct", "value": "90" })),
+        "/api/admin/confirm",
+        Some(json!({ "password": "longenoughpass", "action": "settings.update" })),
         Some(&token),
     )
     .await;
+    assert_eq!(
+        confirm_status,
+        StatusCode::OK,
+        "confirm must succeed; got {confirm_body}"
+    );
+    let confirm_token = confirm_body["confirm_token"].as_str().unwrap().to_string();
+
+    // Update budget_warn_pct with the confirm token.
+    use axum::body::Body as ABody;
+    use axum::http::header;
+    use axum::http::{Method as HM, Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let request = Request::builder()
+        .method(HM::POST)
+        .uri("/api/admin/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header("x-confirm-token", &confirm_token)
+        .body(ABody::from(
+            serde_json::to_vec(&json!({ "key": "budget_warn_pct", "value": "90" })).unwrap(),
+        ))
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
 
     assert_eq!(status, StatusCode::OK, "expected 200; got {body}");
     assert_eq!(body["key"], "budget_warn_pct");
@@ -129,6 +159,60 @@ async fn settings_update_non_sensitive_key_succeeds(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(db_value, "90");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn settings_update_sensitive_key_without_confirm_token_returns_403(pool: PgPool) {
+    let app = build_app(pool.clone());
+    let admin_email = "admin-settings-no-confirm@example.com";
+    let token = login_token(&app, admin_email).await;
+    promote_to_admin(&pool, admin_email).await;
+
+    // All budget/chat keys are now sensitive — updating without a confirm
+    // token must be rejected.
+    let (status, body) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/admin/settings",
+        Some(json!({ "key": "budget_warn_pct", "value": "90" })),
+        Some(&token),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "budget_warn_pct without confirm token must be 403; got {body}"
+    );
+
+    // Repeat for the other newly-sensitive keys.
+    let (status2, _) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/admin/settings",
+        Some(json!({ "key": "chat_enabled", "value": "false" })),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        status2,
+        StatusCode::FORBIDDEN,
+        "chat_enabled without confirm token must be 403"
+    );
+
+    let (status3, _) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/admin/settings",
+        Some(json!({ "key": "budget_monthly_usd", "value": "10.00" })),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(
+        status3,
+        StatusCode::FORBIDDEN,
+        "budget_monthly_usd without confirm token must be 403"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

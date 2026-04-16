@@ -339,10 +339,19 @@ struct SettingUpdateRequest {
 }
 
 /// Keys that require a step-up confirm token before updating.
+///
+/// In addition to the LLM provider/model keys, the chat kill-switch and all
+/// budget-related keys are treated as sensitive because:
+/// - `chat_enabled` can disable chat for all users when set to "false".
+/// - `budget_monthly_usd` and `budget_warn_pct` control how much users can
+///   spend on LLM calls; reducing them without step-up auth could be abused.
 const SENSITIVE_SETTING_KEYS: &[&str] = &[
     "llm_default_provider",
     "llm_gemini_model",
     "llm_claude_model",
+    "chat_enabled",
+    "budget_monthly_usd",
+    "budget_warn_pct",
 ];
 
 /// `POST /api/admin/settings`

@@ -30,8 +30,12 @@ pub enum AppError {
     Internal(String),
 
     /// Monthly LLM budget exceeded.
+    ///
+    /// Intentionally a unit variant: we do not return spend/budget values in
+    /// the HTTP response to avoid leaking financial data.  The user receives
+    /// budget warnings via the `budget_warning` field in SSE `done` events.
     #[error("Monthly budget exceeded")]
-    BudgetExceeded { monthly_spend: f64, budget: f64 },
+    BudgetExceeded,
 
     /// Service unavailable (e.g. kill-switch engaged).
     #[error("Service unavailable: {0}")]
@@ -41,15 +45,10 @@ pub enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match &self {
-            AppError::BudgetExceeded {
-                monthly_spend,
-                budget,
-            } => {
-                let body = json!({
-                    "error": "budget_exceeded",
-                    "monthly_spend": monthly_spend,
-                    "budget": budget,
-                });
+            AppError::BudgetExceeded => {
+                // Return only the error code — no spend or budget values to
+                // avoid leaking financial data in HTTP responses.
+                let body = json!({ "error": "budget_exceeded" });
                 return (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
             }
             AppError::ServiceUnavailable(reason) => {
@@ -81,7 +80,7 @@ impl IntoResponse for AppError {
                 )
             }
             // Already handled above; unreachable but needed for exhaustiveness.
-            AppError::BudgetExceeded { .. } | AppError::ServiceUnavailable(_) => unreachable!(),
+            AppError::BudgetExceeded | AppError::ServiceUnavailable(_) => unreachable!(),
         };
 
         (status, Json(json!({ "error": message }))).into_response()
@@ -130,12 +129,40 @@ mod tests {
 
     #[test]
     fn test_budget_exceeded_returns_429() {
-        let response = AppError::BudgetExceeded {
-            monthly_spend: 5.01,
-            budget: 5.0,
-        }
-        .into_response();
+        let response = AppError::BudgetExceeded.into_response();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn test_budget_exceeded_body_omits_financial_data() {
+        use http_body_util::BodyExt;
+
+        let response = AppError::BudgetExceeded.into_response();
+        // Collect body synchronously using a one-shot runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let bytes = rt
+            .block_on(response.into_body().collect())
+            .unwrap()
+            .to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Must have exactly one key: "error".
+        assert_eq!(
+            body["error"].as_str().unwrap(),
+            "budget_exceeded",
+            "error field must be budget_exceeded"
+        );
+        assert!(
+            body.get("monthly_spend").is_none(),
+            "monthly_spend must not appear in response body"
+        );
+        assert!(
+            body.get("budget").is_none(),
+            "budget must not appear in response body"
+        );
     }
 
     #[test]

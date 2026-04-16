@@ -8,6 +8,7 @@ use common::{
     MockLlmProvider, ScriptedMockProvider, build_app, build_app_with_mock,
     build_app_with_providers, json_oneshot, register_test_user,
 };
+use dashmap::DashMap;
 use planner_backend::ai::provider::LlmProvider;
 use planner_backend::middleware::rate_limit::{EmailRateLimitState, RateLimitState};
 use planner_backend::routes::SettingsCache;
@@ -360,6 +361,7 @@ async fn resolve_provider_uses_preferred_when_available(pool: PgPool) {
         login_rate_limit: EmailRateLimitState::new(10, 900),
         confirm_rate_limit: EmailRateLimitState::new(5, 300),
         settings_cache: SettingsCache::new(),
+        chat_semaphores: Arc::new(DashMap::new()),
     };
 
     let p = state.resolve_provider(Some("claude")).unwrap();
@@ -387,6 +389,7 @@ async fn resolve_provider_falls_back_when_preferred_unavailable(pool: PgPool) {
         login_rate_limit: EmailRateLimitState::new(10, 900),
         confirm_rate_limit: EmailRateLimitState::new(5, 300),
         settings_cache: SettingsCache::new(),
+        chat_semaphores: Arc::new(DashMap::new()),
     };
 
     // "openai" is not available; falls back to "claude" (first alphabetically).
@@ -404,6 +407,7 @@ async fn resolve_provider_returns_none_when_no_providers(pool: PgPool) {
         login_rate_limit: EmailRateLimitState::new(10, 900),
         confirm_rate_limit: EmailRateLimitState::new(5, 300),
         settings_cache: SettingsCache::new(),
+        chat_semaphores: Arc::new(DashMap::new()),
     };
 
     assert!(state.resolve_provider(None).is_none());

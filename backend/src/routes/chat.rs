@@ -29,6 +29,7 @@ use serde_json::json;
 use tracing::{Level, Span, field};
 use uuid::Uuid;
 
+use crate::ai::context::{DEFAULT_MAX_TOKENS, truncate_to_budget};
 use crate::ai::pricing::estimate_cost_usd;
 use crate::ai::prompts::{RoutineContext, UserContext, planner_system_prompt};
 use crate::ai::provider::{
@@ -162,6 +163,20 @@ async fn send_message(
     Span::current().record("conversation_id", conv_id.to_string().as_str());
     Span::current().record("routine_id", routine_id.to_string().as_str());
 
+    // ── Per-user concurrency guard ─────────────────────────────────────────
+    // Acquire a per-user semaphore (1 permit) that serialises the
+    // budget-check + LLM-call + usage-upsert sequence for this user.
+    // This prevents two concurrent requests from the same user from both
+    // passing the budget check before either records usage (TOCTOU race).
+    // The permit is held for the entire handler and released automatically
+    // when `_permit` is dropped at the end of the async block.
+    let semaphore = state
+        .chat_semaphores
+        .entry(user.id)
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone();
+    let _permit = semaphore.acquire().await.unwrap();
+
     // ── Budget check ───────────────────────────────────────────────────────
     // Query the current month's spend for this user from the daily rollup.
     let monthly_spend: f64 = sqlx::query_scalar::<_, f64>(
@@ -190,10 +205,7 @@ async fn send_message(
         .unwrap_or(80.0);
 
     if monthly_spend >= budget_monthly_usd {
-        return Err(AppError::BudgetExceeded {
-            monthly_spend,
-            budget: budget_monthly_usd,
-        });
+        return Err(AppError::BudgetExceeded);
     }
 
     let budget_warning = monthly_spend >= budget_monthly_usd * budget_warn_pct / 100.0;
@@ -328,6 +340,11 @@ async fn send_message(
                 finish_reason = field::Empty,
             );
             let _round_guard = round_span.enter();
+
+            // Trim the message history to stay within the context budget.
+            // This runs at the start of every round so tool-result messages
+            // added in the previous round are also accounted for.
+            llm_messages = truncate_to_budget(llm_messages, DEFAULT_MAX_TOKENS);
 
             // Start a new stream for this round.
             let stream_result = provider.stream_completion(&llm_messages, &tools).await;
