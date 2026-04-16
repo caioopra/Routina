@@ -189,7 +189,34 @@ Phase 3 introduces a single `role` column on `users` (CHECK-constrained to `'use
 - **Default:** every new user gets `role = 'user'` automatically; no application code needs to set it.
 - **Promotion:** an existing admin promotes another user by issuing `UPDATE users SET role = 'admin' WHERE id = $1`. A dedicated API endpoint (Phase 3 Slice B) wraps this with authorization checks.
 - **Partial index:** `users_role_idx` (added in migration 005) covers only the `role = 'admin'` rows. Because virtually all users are regular users the index stays tiny while making the admin-list query (`SELECT * FROM users WHERE role = 'admin'`) an index-only scan.
-- **Audit log:** a full action audit log (migration 006, Phase 3 Slice B) will record admin operations separately from the per-conversation `routine_actions` log.
+- **Audit log:** a full action audit log (migration 006, Phase 3 Slice B) records admin operations in the `audit_log` table, separately from the per-conversation `routine_actions` log.
+
+### `audit_log`
+
+Append-only record of admin-initiated operations. Written whenever an admin performs a privileged action (role promotion/demotion, user deletion, impersonation start/stop, etc.). Rows are never modified after insert — there is no `updated_at` column.
+
+Separate from `routine_actions`, which tracks LLM tool-driven routine mutations; `audit_log` covers the administrative control plane.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID PK | `gen_random_uuid()` |
+| actor_id | UUID FK→users SET NULL | Admin who performed the action; SET NULL on user deletion so the row is preserved |
+| actor_email | TEXT NOT NULL | Denormalised email snapshot at write time; survives user deletion |
+| impersonating | UUID FK→users SET NULL | Non-NULL when the admin is acting as another user via impersonation |
+| action | TEXT NOT NULL | Short operation identifier, e.g. `'promote_user'`, `'demote_user'`, `'delete_user'`, `'impersonate_start'` |
+| target_type | TEXT | Entity kind affected, e.g. `'user'`, `'routine'`; nullable for system-level actions |
+| target_id | TEXT | Affected entity's id (TEXT to accommodate UUIDs and future non-UUID keys); nullable |
+| payload | JSONB | Arbitrary context — before/after values, extra metadata |
+| ip | INET | Client IP at write time (from `X-Forwarded-For` or socket address) |
+| user_agent | TEXT | Raw `User-Agent` header |
+| created_at | TIMESTAMPTZ NOT NULL | Immutable insert timestamp |
+
+**Indexes:**
+- `(actor_id, created_at DESC)` — per-actor activity view and forensic queries
+- `(action, created_at DESC)` — action-type breakdown on the admin dashboard
+- `(created_at DESC)` — bare index for the 90-day retention cleanup job (`DELETE FROM audit_log WHERE created_at < now() - INTERVAL '90 days'`); the composite indexes above are not used for this scan because their leading column does not match the predicate
+
+**Payload safety:** the application-layer `emit_audit` function must strip sensitive keys (`password`, `password_hash`, `token`, `refresh_token`, `secret`, `api_key`) from the JSONB payload before insert. Credentials must never appear in this table.
 
 ### `rules`
 Monthly rules/guidelines for a routine.
@@ -256,6 +283,8 @@ users ──┬── routines ──┬── blocks ──┬── subtasks
         ├── goals (self-referencing via parent_id)
         ├── events
         ├── conversations ── messages
-        └── routine_actions ──┬── routines
-                              └── conversations (nullable)
+        ├── routine_actions ──┬── routines
+        │                     └── conversations (nullable)
+        └── audit_log (actor_id → users SET NULL,
+                       impersonating → users SET NULL)
 ```
