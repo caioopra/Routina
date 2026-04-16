@@ -9,8 +9,10 @@
 //! - `error` — `ProviderError` type.
 //! - `tools` — typed argument structs, tool schemas, and the `ToolExecutor`.
 pub mod claude;
+pub mod context;
 pub mod error;
 pub mod gemini;
+pub mod pricing;
 pub mod prompts;
 pub mod provider;
 pub mod tools;

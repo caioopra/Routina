@@ -29,6 +29,8 @@ use serde_json::json;
 use tracing::{Level, Span, field};
 use uuid::Uuid;
 
+use crate::ai::context::{DEFAULT_MAX_TOKENS, truncate_to_budget};
+use crate::ai::pricing::estimate_cost_usd;
 use crate::ai::prompts::{RoutineContext, UserContext, planner_system_prompt};
 use crate::ai::provider::{
     FinishReason, Message as LlmMessage, ProviderEvent, TokenUsage, ToolCall,
@@ -80,6 +82,16 @@ async fn send_message(
         provider = field::Empty,
     );
     let _turn_guard = turn_span.enter();
+
+    // ── Kill-switch: check chat_enabled setting ───────────────────────────
+    let chat_enabled = state
+        .settings_cache
+        .get(&state.pool, "chat_enabled")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    if chat_enabled == "false" {
+        return Err(AppError::ServiceUnavailable("chat_disabled".into()));
+    }
 
     // ── Resolve the LLM provider for this user ────────────────────────────
     // Read from users.preferences.llm_provider; fall back to first available.
@@ -150,6 +162,53 @@ async fn send_message(
     // Record resolved IDs and provider into the turn span now that we have them.
     Span::current().record("conversation_id", conv_id.to_string().as_str());
     Span::current().record("routine_id", routine_id.to_string().as_str());
+
+    // ── Per-user concurrency guard ─────────────────────────────────────────
+    // Acquire a per-user semaphore (1 permit) that serialises the
+    // budget-check + LLM-call + usage-upsert sequence for this user.
+    // This prevents two concurrent requests from the same user from both
+    // passing the budget check before either records usage (TOCTOU race).
+    // acquire_owned() is used so the OwnedSemaphorePermit can be moved into
+    // the stream closure; the permit is released only when the stream drops.
+    let semaphore = state
+        .chat_semaphores
+        .entry(user.id)
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)))
+        .clone();
+    let permit = semaphore.acquire_owned().await.unwrap();
+
+    // ── Budget check ───────────────────────────────────────────────────────
+    // Query the current month's spend for this user from the daily rollup.
+    let monthly_spend: f64 = sqlx::query_scalar::<_, f64>(
+        "SELECT COALESCE(SUM(estimated_cost_usd::float8), 0) \
+         FROM llm_usage_daily \
+         WHERE user_id = $1 \
+           AND day >= date_trunc('month', CURRENT_DATE)::date",
+    )
+    .bind(user.id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0.0);
+
+    let budget_monthly_usd: f64 = state
+        .settings_cache
+        .get(&state.pool, "budget_monthly_usd")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5.0);
+
+    let budget_warn_pct: f64 = state
+        .settings_cache
+        .get(&state.pool, "budget_warn_pct")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(80.0);
+
+    if monthly_spend >= budget_monthly_usd {
+        return Err(AppError::BudgetExceeded);
+    }
+
+    let budget_warning = monthly_spend >= budget_monthly_usd * budget_warn_pct / 100.0;
 
     // ── Persist the user message ───────────────────────────────────────────
     sqlx::query(
@@ -245,10 +304,25 @@ async fn send_message(
     // Record provider name into the enclosing turn span.
     Span::current().record("provider", provider_name.as_str());
 
+    // Derive model name from config based on provider.
+    let model_name = match provider_name.as_str() {
+        "gemini" => state.config.llm_gemini_model.clone(),
+        "claude" => state.config.llm_claude_model.clone(),
+        _ => provider_name.clone(),
+    };
+
     let tools = all_tool_schemas();
     let pool = state.pool.clone();
 
+    let user_id = user.id;
+
     let stream_body = async_stream::stream! {
+        // Hold the per-user semaphore permit for the full duration of the stream
+        // (LLM calls + usage upsert).  Using acquire_owned() in the handler and
+        // moving the permit here ensures the guard is dropped only when the stream
+        // itself is dropped, not when the handler returns the response.
+        let _permit = permit;
+
         // Announce provider.
         yield Ok::<String, Infallible>(sse_line(
             "provider",
@@ -273,6 +347,11 @@ async fn send_message(
             );
             let _round_guard = round_span.enter();
 
+            // Trim the message history to stay within the context budget.
+            // This runs at the start of every round so tool-result messages
+            // added in the previous round are also accounted for.
+            llm_messages = truncate_to_budget(llm_messages, DEFAULT_MAX_TOKENS);
+
             // Start a new stream for this round.
             let stream_result = provider.stream_completion(&llm_messages, &tools).await;
             let mut llm_stream = match stream_result {
@@ -288,6 +367,8 @@ async fn send_message(
             let mut accumulated_text = String::new();
             let mut accumulated_tool_calls: Vec<ToolCall> = Vec::new();
             let mut finish_reason = FinishReason::Stop;
+            // Per-round usage (reset each iteration).
+            let mut round_usage: Option<TokenUsage> = None;
 
             // Drain the stream for this round.
             while let Some(event) = llm_stream.next().await {
@@ -303,8 +384,9 @@ async fn send_message(
                     }
                     ProviderEvent::Done { finish_reason: fr, usage } => {
                         finish_reason = fr;
-                        // Accumulate token usage from this round.
-                        if let Some(u) = usage {
+                        round_usage = usage;
+                        // Accumulate token usage from this round into the total.
+                        if let Some(u) = round_usage {
                             let acc = total_usage.get_or_insert(TokenUsage::default());
                             acc.add(u);
                         }
@@ -335,8 +417,8 @@ async fn send_message(
 
             let persist_result = sqlx::query(
                 "INSERT INTO messages \
-                 (id, conversation_id, role, content, tool_calls, provider) \
-                 VALUES ($1, $2, 'assistant', $3, $4, $5)",
+                 (id, conversation_id, role, content, tool_calls, provider, input_tokens, output_tokens, model) \
+                 VALUES ($1, $2, 'assistant', $3, $4, $5, $6, $7, $8)",
             )
             .bind(asst_msg_id)
             .bind(conv_id)
@@ -347,6 +429,9 @@ async fn send_message(
             })
             .bind(&tool_calls_json)
             .bind(provider_name.as_str())
+            .bind(round_usage.map(|u| u.input_tokens as i32))
+            .bind(round_usage.map(|u| u.output_tokens as i32))
+            .bind(model_name.as_str())
             .execute(&pool)
             .await;
 
@@ -463,6 +548,40 @@ async fn send_message(
             .execute(&pool)
             .await;
 
+        // ── Usage rollup upsert ────────────────────────────────────────────
+        // After all rounds complete, upsert the accumulated usage into the
+        // daily rollup table so budget checks reflect real-time spend.
+        if let Some(u) = total_usage {
+            let cost = estimate_cost_usd(
+                &provider_name,
+                &model_name,
+                u.input_tokens,
+                u.output_tokens,
+            );
+            let rollup_result = sqlx::query(
+                "INSERT INTO llm_usage_daily \
+                 (day, user_id, provider, model, input_tokens, output_tokens, request_count, estimated_cost_usd) \
+                 VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, 1, $6) \
+                 ON CONFLICT (day, user_id, provider, model) DO UPDATE SET \
+                     input_tokens       = llm_usage_daily.input_tokens  + EXCLUDED.input_tokens, \
+                     output_tokens      = llm_usage_daily.output_tokens + EXCLUDED.output_tokens, \
+                     request_count      = llm_usage_daily.request_count + 1, \
+                     estimated_cost_usd = llm_usage_daily.estimated_cost_usd + EXCLUDED.estimated_cost_usd",
+            )
+            .bind(user_id)
+            .bind(provider_name.as_str())
+            .bind(model_name.as_str())
+            .bind(u.input_tokens as i64)
+            .bind(u.output_tokens as i64)
+            .bind(cost)
+            .execute(&pool)
+            .await;
+
+            if let Err(e) = rollup_result {
+                tracing::error!(error = ?e, "Failed to upsert llm_usage_daily");
+            }
+        }
+
         if had_error {
             // error_payload is already a JSON string (provider_error or tool_loop_limit_reached).
             yield Ok(sse_line("error", &error_payload));
@@ -474,11 +593,13 @@ async fn send_message(
                     "usage": {
                         "input_tokens": u.input_tokens,
                         "output_tokens": u.output_tokens,
-                    }
+                    },
+                    "budget_warning": budget_warning,
                 }),
                 None => json!({
                     "conversation_id": conv_id,
                     "message_id": last_asst_msg_id,
+                    "budget_warning": budget_warning,
                 }),
             };
             yield Ok(sse_line("done", &done_payload.to_string()));
