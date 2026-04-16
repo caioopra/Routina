@@ -10,6 +10,7 @@ use common::{
 };
 use planner_backend::ai::provider::LlmProvider;
 use planner_backend::middleware::rate_limit::{EmailRateLimitState, RateLimitState};
+use planner_backend::routes::SettingsCache;
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -358,6 +359,7 @@ async fn resolve_provider_uses_preferred_when_available(pool: PgPool) {
         rate_limit: RateLimitState::default(),
         login_rate_limit: EmailRateLimitState::new(10, 900),
         confirm_rate_limit: EmailRateLimitState::new(5, 300),
+        settings_cache: SettingsCache::new(),
     };
 
     let p = state.resolve_provider(Some("claude")).unwrap();
@@ -384,6 +386,7 @@ async fn resolve_provider_falls_back_when_preferred_unavailable(pool: PgPool) {
         rate_limit: RateLimitState::default(),
         login_rate_limit: EmailRateLimitState::new(10, 900),
         confirm_rate_limit: EmailRateLimitState::new(5, 300),
+        settings_cache: SettingsCache::new(),
     };
 
     // "openai" is not available; falls back to "claude" (first alphabetically).
@@ -400,6 +403,7 @@ async fn resolve_provider_returns_none_when_no_providers(pool: PgPool) {
         rate_limit: RateLimitState::default(),
         login_rate_limit: EmailRateLimitState::new(10, 900),
         confirm_rate_limit: EmailRateLimitState::new(5, 300),
+        settings_cache: SettingsCache::new(),
     };
 
     assert!(state.resolve_provider(None).is_none());

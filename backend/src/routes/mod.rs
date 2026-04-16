@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::middleware::from_fn_with_state;
 use sqlx::PgPool;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::ai::provider::LlmProvider;
@@ -19,6 +21,91 @@ use crate::middleware::rate_limit::{
 pub const CONFIRM_RATE_MAX: usize = 5;
 /// Sliding-window duration for the confirm rate limiter (5 minutes).
 pub const CONFIRM_RATE_WINDOW_SECS: u64 = 300;
+
+// ── SettingsCache ─────────────────────────────────────────────────────────────
+
+/// How long the in-memory settings cache is considered fresh.
+const SETTINGS_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// In-memory cache for `app_settings` rows with a 60-second TTL.
+///
+/// Reads all rows from the DB on the first call and on any call after the cache
+/// has gone stale.  `invalidate()` forces the next call to refresh immediately.
+#[derive(Clone)]
+pub struct SettingsCache {
+    inner: Arc<RwLock<HashMap<String, String>>>,
+    refreshed_at: Arc<RwLock<Instant>>,
+}
+
+impl Default for SettingsCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SettingsCache {
+    /// Create an empty cache that will refresh on first use.
+    pub fn new() -> Self {
+        // Set refreshed_at to a point far in the past so the first call always
+        // triggers a DB load.
+        let stale = Instant::now()
+            .checked_sub(SETTINGS_CACHE_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+            refreshed_at: Arc::new(RwLock::new(stale)),
+        }
+    }
+
+    /// Return the value for `key`, refreshing from the DB when the cache is stale.
+    pub async fn get(&self, pool: &PgPool, key: &str) -> Option<String> {
+        // Check staleness under a read lock first to avoid unnecessary writes.
+        let stale = {
+            let ts = self.refreshed_at.read().await;
+            ts.elapsed() > SETTINGS_CACHE_TTL
+        };
+
+        if stale {
+            self.refresh(pool).await;
+        }
+
+        let map = self.inner.read().await;
+        map.get(key).cloned()
+    }
+
+    /// Force the cache to expire so the next `get` call reloads from the DB.
+    pub async fn invalidate(&self) {
+        let stale = Instant::now()
+            .checked_sub(SETTINGS_CACHE_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut ts = self.refreshed_at.write().await;
+        *ts = stale;
+    }
+
+    /// Reload all `app_settings` rows from the DB into the in-memory map.
+    async fn refresh(&self, pool: &PgPool) {
+        let rows: Result<Vec<(String, String)>, _> =
+            sqlx::query_as::<_, (String, String)>("SELECT key, value FROM app_settings")
+                .fetch_all(pool)
+                .await;
+
+        match rows {
+            Ok(pairs) => {
+                let mut map = self.inner.write().await;
+                map.clear();
+                for (k, v) in pairs {
+                    map.insert(k, v);
+                }
+                let mut ts = self.refreshed_at.write().await;
+                *ts = Instant::now();
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "SettingsCache: failed to refresh from DB");
+                // Leave the existing (stale) data in place so reads still work.
+            }
+        }
+    }
+}
 
 pub mod admin;
 pub mod auth;
@@ -39,6 +126,16 @@ pub fn create_router(pool: PgPool, config: Config) -> Router {
     create_router_with_providers(pool, config, HashMap::new())
 }
 
+/// Build the `SettingsCache` and pre-warm it from the DB.
+/// If the DB is unreachable at startup the cache starts empty and refreshes
+/// on the first request.
+#[allow(dead_code)]
+pub async fn build_settings_cache(pool: &PgPool) -> SettingsCache {
+    let cache = SettingsCache::new();
+    cache.refresh(pool).await;
+    cache
+}
+
 /// Build a router with a custom per-user chat rate limit — used in integration
 /// tests so we can exercise the 429 path without sending 20+ requests.
 pub fn create_router_with_rate_limit(
@@ -54,6 +151,7 @@ pub fn create_router_with_rate_limit(
         rate_limit: RateLimitState::new(chat_rate_limit),
         login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
         confirm_rate_limit: EmailRateLimitState::new(CONFIRM_RATE_MAX, CONFIRM_RATE_WINDOW_SECS),
+        settings_cache: SettingsCache::new(),
     };
 
     let chat_router =
@@ -109,6 +207,7 @@ pub fn create_router_with_providers(
         rate_limit: RateLimitState::new(CHAT_RATE_LIMIT),
         login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
         confirm_rate_limit: EmailRateLimitState::new(CONFIRM_RATE_MAX, CONFIRM_RATE_WINDOW_SECS),
+        settings_cache: SettingsCache::new(),
     };
 
     // Chat route with per-user rate limiting layered on top.
@@ -174,6 +273,10 @@ pub struct AppState {
     /// Keyed on the admin's user_id (as a String).
     /// Configured for 5 attempts per 5-minute window.
     pub confirm_rate_limit: EmailRateLimitState,
+    /// In-memory cache for `app_settings` rows with a 60-second TTL.
+    /// Used by the chat handler for kill-switch and budget checks without
+    /// hitting the DB on every request.
+    pub settings_cache: SettingsCache,
 }
 
 impl AppState {
