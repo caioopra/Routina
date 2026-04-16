@@ -77,6 +77,8 @@ fn allowed_tool_args(tool_name: &str) -> &'static [&'static str] {
             "start_time",
             "end_time",
             "type",
+            "note",
+            "label_names",
         ],
         "update_block" => &[
             "block_id",
@@ -86,14 +88,18 @@ fn allowed_tool_args(tool_name: &str) -> &'static [&'static str] {
             "end_time",
             "type",
             "note",
+            "label_names",
         ],
         "delete_block" => &["block_id"],
+        "list_rules" => &[],
+        "create_rule" => &["title", "description", "priority"],
+        "update_rule" => &["rule_id", "title", "description", "priority"],
+        "delete_rule" => &["rule_id"],
         "list_labels" => &[],
         "create_label" => &["name", "color_bg", "color_text", "color_border", "icon"],
         "update_label" => &["label_id", "name"],
         "delete_label" => &["label_id"],
-        "set_block_labels" => &["block_id"],
-        "undo_last_action" => &["routine_id"],
+        "undo_last_action" => &[],
         _ => &[],
     }
 }
@@ -706,7 +712,17 @@ mod tests {
         assert!(keys.contains(&"start_time"));
         assert!(keys.contains(&"end_time"));
         assert!(keys.contains(&"type"));
-        assert_eq!(keys.len(), 6);
+        assert!(keys.contains(&"note"));
+        assert!(keys.contains(&"label_names"));
+        assert_eq!(keys.len(), 8);
+    }
+
+    #[test]
+    fn allowed_tool_args_update_block_includes_label_names() {
+        let keys = allowed_tool_args("update_block");
+        assert!(keys.contains(&"label_names"));
+        assert!(keys.contains(&"note"));
+        assert!(keys.contains(&"block_id"));
     }
 
     #[test]
@@ -718,6 +734,51 @@ mod tests {
     #[test]
     fn allowed_tool_args_list_labels_returns_empty() {
         let keys = allowed_tool_args("list_labels");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_list_rules_returns_empty() {
+        let keys = allowed_tool_args("list_rules");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_create_rule_returns_expected_keys() {
+        let keys = allowed_tool_args("create_rule");
+        assert!(keys.contains(&"title"));
+        assert!(keys.contains(&"description"));
+        assert!(keys.contains(&"priority"));
+        assert_eq!(keys.len(), 3);
+    }
+
+    #[test]
+    fn allowed_tool_args_update_rule_returns_expected_keys() {
+        let keys = allowed_tool_args("update_rule");
+        assert!(keys.contains(&"rule_id"));
+        assert!(keys.contains(&"title"));
+        assert!(keys.contains(&"description"));
+        assert!(keys.contains(&"priority"));
+        assert_eq!(keys.len(), 4);
+    }
+
+    #[test]
+    fn allowed_tool_args_delete_rule_returns_rule_id() {
+        let keys = allowed_tool_args("delete_rule");
+        assert_eq!(keys, &["rule_id"]);
+    }
+
+    #[test]
+    fn allowed_tool_args_undo_last_action_returns_empty() {
+        let keys = allowed_tool_args("undo_last_action");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn allowed_tool_args_set_block_labels_not_present() {
+        // set_block_labels does not exist in the executor; it must fall through
+        // to the wildcard and return an empty allowlist.
+        let keys = allowed_tool_args("set_block_labels");
         assert!(keys.is_empty());
     }
 
