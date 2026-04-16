@@ -404,6 +404,170 @@ async fn audit_list_action_filter_returns_matching_rows(pool: PgPool) {
     );
 }
 
+// ── Fix 6: rate-limited login emits audit row ────────────────────────────────
+
+/// After exceeding the login rate limit, a `auth.login.rate_limited` audit row
+/// must be created for the attempt that triggered the 429.
+#[sqlx::test(migrations = "./migrations")]
+async fn rate_limited_login_creates_audit_log_row(pool: PgPool) {
+    let app = build_app(pool.clone());
+    let email = "rl-audit@example.com";
+
+    register_test_user(&app, email, USER_PASS).await;
+
+    // Exhaust the 10-attempt window.
+    for _ in 0..10 {
+        json_oneshot(
+            &app,
+            Method::POST,
+            "/api/auth/login",
+            Some(serde_json::json!({ "email": email, "password": "wrong" })),
+            None,
+        )
+        .await;
+    }
+
+    // 11th attempt triggers 429 AND the audit log.
+    let (status, body) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/auth/login",
+        Some(serde_json::json!({ "email": email, "password": "wrong" })),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "must be 429, got {body}"
+    );
+
+    // Give the spawned task a moment to flush.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_log \
+         WHERE action = 'auth.login.rate_limited' AND actor_email = $1",
+    )
+    .bind(email)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        count >= 1,
+        "at least one auth.login.rate_limited audit row must exist"
+    );
+}
+
+// ── Fix 3: confirm endpoint rate limit ───────────────────────────────────────
+
+/// After 5 confirm attempts the 6th must return a validation error (rate
+/// limited) regardless of password correctness.
+#[sqlx::test(migrations = "./migrations")]
+async fn confirm_rate_limited_after_five_attempts(pool: PgPool) {
+    let app = build_app(pool.clone());
+    let admin_email = "confirm-rl@example.com";
+    let admin_token = setup_admin(&app, &pool, admin_email).await;
+
+    // 5 successful confirms should all return 200.
+    for i in 0..5 {
+        let (status, body) = json_oneshot(
+            &app,
+            Method::POST,
+            "/api/admin/confirm",
+            Some(serde_json::json!({ "password": ADMIN_PASS, "action": "provider.update" })),
+            Some(&admin_token),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "attempt {i} must succeed, got {body}"
+        );
+    }
+
+    // 6th attempt must be rate-limited.
+    let (status, body) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/admin/confirm",
+        Some(serde_json::json!({ "password": ADMIN_PASS, "action": "provider.update" })),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "6th confirm attempt must be rate-limited (422), got {body}"
+    );
+}
+
+// ── Fix 4: action validation in confirm ──────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn confirm_rejects_action_with_wildcard_chars(pool: PgPool) {
+    let app = build_app(pool.clone());
+    let admin_token = setup_admin(&app, &pool, "action-val@example.com").await;
+
+    let (status, body) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/admin/confirm",
+        Some(serde_json::json!({ "password": ADMIN_PASS, "action": "bad%action" })),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "action with '%' must be rejected with 422, got {body}"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn confirm_rejects_oversized_action(pool: PgPool) {
+    let app = build_app(pool.clone());
+    let admin_token = setup_admin(&app, &pool, "action-size@example.com").await;
+
+    let long_action = "a".repeat(129);
+    let (status, body) = json_oneshot(
+        &app,
+        Method::POST,
+        "/api/admin/confirm",
+        Some(serde_json::json!({ "password": ADMIN_PASS, "action": long_action })),
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "action >128 bytes must be rejected with 422, got {body}"
+    );
+}
+
+// ── Fix 1: action filter rejects wildcard characters in audit query ───────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn audit_list_action_filter_rejects_wildcard_chars(pool: PgPool) {
+    let app = build_app(pool.clone());
+    let admin_token = setup_admin(&app, &pool, "wc-admin@example.com").await;
+
+    let (status, body) = json_oneshot(
+        &app,
+        Method::GET,
+        "/api/admin/audit?action=auth%25login", // '%25' is URL-encoded '%'
+        None,
+        Some(&admin_token),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "action param with '%' must return 422, got {body}"
+    );
+}
+
 // ── Bonus: token refresh emits audit row ─────────────────────────────────────
 
 #[sqlx::test(migrations = "./migrations")]

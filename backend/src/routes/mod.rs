@@ -15,6 +15,11 @@ use crate::middleware::rate_limit::{
     rate_limit_middleware,
 };
 
+/// Maximum step-up confirm attempts per admin user per window.
+pub const CONFIRM_RATE_MAX: usize = 5;
+/// Sliding-window duration for the confirm rate limiter (5 minutes).
+pub const CONFIRM_RATE_WINDOW_SECS: u64 = 300;
+
 pub mod admin;
 pub mod auth;
 pub mod blocks;
@@ -48,6 +53,7 @@ pub fn create_router_with_rate_limit(
         providers,
         rate_limit: RateLimitState::new(chat_rate_limit),
         login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
+        confirm_rate_limit: EmailRateLimitState::new(CONFIRM_RATE_MAX, CONFIRM_RATE_WINDOW_SECS),
     };
 
     let chat_router =
@@ -102,6 +108,7 @@ pub fn create_router_with_providers(
         providers,
         rate_limit: RateLimitState::new(CHAT_RATE_LIMIT),
         login_rate_limit: EmailRateLimitState::new(LOGIN_RATE_MAX, LOGIN_RATE_WINDOW_SECS),
+        confirm_rate_limit: EmailRateLimitState::new(CONFIRM_RATE_MAX, CONFIRM_RATE_WINDOW_SECS),
     };
 
     // Chat route with per-user rate limiting layered on top.
@@ -163,6 +170,10 @@ pub struct AppState {
     /// Per-email sliding-window rate limiter for the login endpoint.
     /// Keyed on the normalized (lowercase, trimmed) email address.
     pub login_rate_limit: EmailRateLimitState,
+    /// Per-user sliding-window rate limiter for the step-up confirm endpoint.
+    /// Keyed on the admin's user_id (as a String).
+    /// Configured for 5 attempts per 5-minute window.
+    pub confirm_rate_limit: EmailRateLimitState,
 }
 
 impl AppState {

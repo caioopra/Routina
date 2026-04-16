@@ -134,6 +134,27 @@ async fn login(
     // database, so an attacker cannot use the 429 threshold to confirm that an
     // email is registered.
     if let Err(retry_after) = state.login_rate_limit.check_and_record(&normalized_email) {
+        // Fix 6: audit-log rate-limited attempts so credential-stuffing attacks
+        // are visible in the audit trail.  Fire-and-forget — if the insert fails
+        // we still return 429 immediately without blocking.
+        let pool = state.pool.clone();
+        let email_clone = normalized_email.clone();
+        let ip_clone = ip.clone();
+        tokio::spawn(async move {
+            let _ = emit_audit(
+                &pool,
+                None,
+                &email_clone,
+                "auth.login.rate_limited",
+                Some("email"),
+                Some(&email_clone),
+                None,
+                ip_clone.as_deref(),
+                None,
+            )
+            .await;
+        });
+
         let body = json!({
             "error": "rate_limited",
             "retry_after_seconds": retry_after,
