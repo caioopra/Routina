@@ -26,6 +26,88 @@ let providersState = { available: ["gemini", "claude"], selected: "gemini" };
 
 let mockUserRole = "user";
 
+// ── Admin mock state ──
+
+let mockSettings = [
+  {
+    key: "active_provider",
+    value: "gemini",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+  { key: "chat_enabled", value: "true", updated_at: "2026-01-01T00:00:00Z" },
+  {
+    key: "max_tokens_per_request",
+    value: "4096",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+];
+
+const mockUsageMetrics = [
+  {
+    day: "2026-03-17",
+    provider: "gemini",
+    model: "gemini-2.0-flash",
+    input_tokens: 12000,
+    output_tokens: 3500,
+    request_count: 45,
+    estimated_cost_usd: 0.02,
+  },
+  {
+    day: "2026-03-18",
+    provider: "gemini",
+    model: "gemini-2.0-flash",
+    input_tokens: 18000,
+    output_tokens: 5200,
+    request_count: 67,
+    estimated_cost_usd: 0.03,
+  },
+];
+
+const mockAdminUsers = [
+  {
+    id: "user-admin-1",
+    email: "admin@test.com",
+    name: "Admin User",
+    role: "admin",
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "user-2",
+    email: "alice@test.com",
+    name: "Alice",
+    role: "user",
+    created_at: "2026-02-01T00:00:00Z",
+  },
+  {
+    id: "user-3",
+    email: "bob@test.com",
+    name: "Bob",
+    role: "user",
+    created_at: "2026-03-01T00:00:00Z",
+  },
+];
+
+const mockAuditLog = [
+  {
+    id: "audit-1",
+    actor_email: "admin@test.com",
+    action: "setting.update",
+    target_type: "setting",
+    target_id: "active_provider",
+    payload: { old: "claude", new: "gemini" },
+    created_at: "2026-04-01T12:00:00Z",
+  },
+  {
+    id: "audit-2",
+    actor_email: "admin@test.com",
+    action: "user.role_change",
+    target_type: "user",
+    target_id: "user-2",
+    payload: { old_role: "user", new_role: "admin" },
+    created_at: "2026-04-02T08:30:00Z",
+  },
+];
+
 export function seedRoutines(initial) {
   routines = initial.map((r) => ({ ...r }));
   routineCounter = routines.length;
@@ -86,6 +168,19 @@ export function resetMockState() {
   chatMessageCounter = 0;
   providersState = { available: ["gemini", "claude"], selected: "gemini" };
   mockUserRole = "user";
+  mockSettings = [
+    {
+      key: "active_provider",
+      value: "gemini",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+    { key: "chat_enabled", value: "true", updated_at: "2026-01-01T00:00:00Z" },
+    {
+      key: "max_tokens_per_request",
+      value: "4096",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+  ];
 }
 
 function requireAuth(request) {
@@ -655,6 +750,121 @@ export const handlers = [
     providersState = { ...providersState, selected: provider };
     return HttpResponse.json(providersState);
   }),
+
+  // ── Admin endpoints ──
+
+  http.get("/api/admin/dashboard", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    return HttpResponse.json({ ok: true, admin_email: "admin@test.com" });
+  }),
+
+  http.get("/api/admin/settings", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    return HttpResponse.json(mockSettings);
+  }),
+
+  http.post("/api/admin/settings", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const body = (await request.json()) || {};
+    const { key, value } = body;
+    if (!key || value === undefined) {
+      return HttpResponse.json(
+        { error: "Missing key or value" },
+        { status: 422 },
+      );
+    }
+    const idx = mockSettings.findIndex((s) => s.key === key);
+    const updated = {
+      key,
+      value: String(value),
+      updated_at: new Date().toISOString(),
+    };
+    if (idx !== -1) {
+      mockSettings[idx] = updated;
+    } else {
+      mockSettings.push(updated);
+    }
+    return HttpResponse.json(updated);
+  }),
+
+  http.get("/api/admin/metrics/usage", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    return HttpResponse.json(mockUsageMetrics);
+  }),
+
+  http.get("/api/admin/users", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    return HttpResponse.json(mockAdminUsers);
+  }),
+
+  http.get("/api/admin/audit", ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const url = new URL(request.url);
+    const action = url.searchParams.get("action");
+    const limit = url.searchParams.get("limit");
+    let result = [...mockAuditLog];
+    if (action) {
+      result = result.filter((e) => e.action.startsWith(action));
+    }
+    if (limit) {
+      result = result.slice(0, Number(limit));
+    }
+    return HttpResponse.json(result);
+  }),
+
+  http.post("/api/admin/confirm", async ({ request }) => {
+    if (!requireAuth(request)) {
+      return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (mockUserRole !== "admin") {
+      return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    return HttpResponse.json({ confirm_token: "mock-confirm-token" });
+  }),
+
+  http.post(
+    "/api/admin/users/:userId/rate-limit",
+    async ({ request, params }) => {
+      if (!requireAuth(request)) {
+        return HttpResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      if (mockUserRole !== "admin") {
+        return HttpResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      const body = (await request.json()) || {};
+      return HttpResponse.json({ user_id: params.userId, ...body });
+    },
+  ),
 
   // ── Me / planner-context ──
 
