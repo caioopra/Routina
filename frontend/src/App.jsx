@@ -8,7 +8,8 @@ import Routines from "./pages/Routines.jsx";
 import RoutineDetail from "./pages/RoutineDetail.jsx";
 import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
 import AdminRoute from "./components/admin/AdminRoute.jsx";
-import AdminDashboard from "./pages/AdminDashboard.jsx";
+import AdminShell from "./components/admin/AdminShell.jsx";
+import AdminDashboard from "./pages/admin/AdminDashboard.jsx";
 import { useAuthStore } from "./stores/authStore.js";
 
 const queryClient = new QueryClient({
@@ -73,13 +74,22 @@ export default function App() {
             }
           />
           <Route
-            path="/admin/dashboard"
+            path="/admin"
             element={
               <AdminRoute>
-                <AdminDashboard />
+                <AdminShell />
               </AdminRoute>
             }
-          />
+          >
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<AdminDashboard />} />
+            <Route
+              path="providers"
+              element={<div>Providers — coming soon</div>}
+            />
+            <Route path="users" element={<div>Users — coming soon</div>} />
+            <Route path="audit" element={<div>Audit — coming soon</div>} />
+          </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
