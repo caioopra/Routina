@@ -18,6 +18,8 @@
 --   migrations does not overwrite admin-edited values.
 --
 -- DOWN (manual revert):
+--   DROP TRIGGER IF EXISTS app_settings_set_updated_at ON app_settings;
+--   DROP FUNCTION IF EXISTS set_updated_at;
 --   DROP INDEX IF EXISTS llm_usage_daily_user_day;
 --   DROP TABLE IF EXISTS llm_usage_daily;
 --   DROP TABLE IF EXISTS app_settings;
@@ -43,11 +45,32 @@ CREATE INDEX llm_usage_daily_user_day ON llm_usage_daily (user_id, day DESC);
 -- Runtime application settings ---------------------------------------------
 
 CREATE TABLE app_settings (
-    key        TEXT PRIMARY KEY,
-    value      TEXT        NOT NULL,
+    key        TEXT PRIMARY KEY
+                   CHECK (key IN (
+                       'llm_default_provider',
+                       'llm_gemini_model',
+                       'llm_claude_model',
+                       'budget_monthly_usd',
+                       'budget_warn_pct',
+                       'chat_enabled'
+                   )),
+    value      TEXT        NOT NULL
+                   CHECK (char_length(value) <= 1024),
     updated_by UUID        REFERENCES users(id) ON DELETE SET NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Reusable updated_at trigger function (shared across tables)
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER app_settings_set_updated_at
+    BEFORE UPDATE ON app_settings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Seed default values.  ON CONFLICT DO NOTHING makes this idempotent: if an
 -- admin has already updated a setting its current value is preserved.

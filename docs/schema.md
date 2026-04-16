@@ -297,10 +297,14 @@ Flat key-value store for runtime configuration values that admins can update wit
 
 | Column | Type | Notes |
 |--------|------|-------|
-| key | TEXT PK | Setting name, e.g. `'llm_default_provider'` |
-| value | TEXT NOT NULL | Setting value (always stored as text; parsed by the application) |
+| key | TEXT PK | Setting name; CHECK-constrained to the allowlist below |
+| value | TEXT NOT NULL | Setting value (always stored as text; parsed by the application); CHECK `char_length(value) <= 1024` |
 | updated_by | UUID FK→users SET NULL | Admin who last changed this value; NULL for seed rows |
-| updated_at | TIMESTAMPTZ NOT NULL | Auto-set to `now()` on insert; application must update explicitly |
+| updated_at | TIMESTAMPTZ NOT NULL | Auto-updated by `app_settings_set_updated_at` trigger |
+
+**Key allowlist (CHECK constraint):** `'llm_default_provider'`, `'llm_gemini_model'`, `'llm_claude_model'`, `'budget_monthly_usd'`, `'budget_warn_pct'`, `'chat_enabled'`.
+
+**Trigger:** `app_settings_set_updated_at` (BEFORE UPDATE) calls the shared `set_updated_at()` plpgsql function to keep `updated_at` current automatically.
 
 **Default seed values:**
 
@@ -325,7 +329,9 @@ Per-user overrides for daily LLM token and request limits. One-to-one extension 
 | override_reason | TEXT | Optional free-text explanation for auditing |
 | set_by | UUID FK→users SET NULL | Admin who wrote this row; SET NULL on admin deletion |
 | created_at | TIMESTAMPTZ NOT NULL | |
-| updated_at | TIMESTAMPTZ NOT NULL | |
+| updated_at | TIMESTAMPTZ NOT NULL | Auto-updated by `user_rate_limits_set_updated_at` trigger |
+
+**Trigger:** `user_rate_limits_set_updated_at` (BEFORE UPDATE) calls the shared `set_updated_at()` plpgsql function (defined in migration 007) to keep `updated_at` current automatically.
 
 ## Relationships Diagram
 

@@ -18,6 +18,7 @@
 -- Relationship: one-to-one extension of users; PRIMARY KEY = user_id.
 --
 -- DOWN (manual revert):
+--   DROP TRIGGER IF EXISTS user_rate_limits_set_updated_at ON user_rate_limits;
 --   DROP TABLE IF EXISTS user_rate_limits;
 
 CREATE TABLE user_rate_limits (
@@ -29,3 +30,8 @@ CREATE TABLE user_rate_limits (
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- set_updated_at() is defined in migration 007 and shared across tables.
+CREATE TRIGGER user_rate_limits_set_updated_at
+    BEFORE UPDATE ON user_rate_limits
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
