@@ -7,14 +7,19 @@
 //! tokens.
 //!
 //! Routes in this module:
-//!   `GET  /api/admin/dashboard` → proof-of-gating stub (Slice A)
-//!   `POST /api/admin/confirm`   → step-up auth: password re-check → confirm token
-//!   `GET  /api/admin/audit`     → paginated audit log reader
+//!   `GET  /api/admin/dashboard`              → proof-of-gating stub (Slice A)
+//!   `POST /api/admin/confirm`                → step-up auth: password re-check → confirm token
+//!   `GET  /api/admin/audit`                  → paginated audit log reader
+//!   `GET  /api/admin/settings`               → list all app_settings rows
+//!   `POST /api/admin/settings`               → update a setting value
+//!   `GET  /api/admin/metrics/usage`          → LLM usage per day/provider
+//!   `GET  /api/admin/users`                  → list all users (no passwords)
+//!   `POST /api/admin/users/:id/rate-limit`   → set per-user rate limit override
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::{Json, Router, routing::get, routing::post};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
@@ -30,6 +35,10 @@ pub fn router() -> Router<AppState> {
         .route("/dashboard", get(dashboard))
         .route("/confirm", post(confirm))
         .route("/audit", get(audit_list))
+        .route("/settings", get(settings_list).post(settings_update))
+        .route("/metrics/usage", get(metrics_usage))
+        .route("/users", get(users_list))
+        .route("/users/{id}/rate-limit", post(users_set_rate_limit))
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -295,6 +304,257 @@ async fn audit_list(
     };
 
     Ok(Json(json!(rows)))
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+/// A single `app_settings` row returned to the client.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct SettingRow {
+    pub key: String,
+    pub value: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `GET /api/admin/settings`
+///
+/// Returns all `app_settings` rows as `[{key, value, updated_at}]`.
+async fn settings_list(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = sqlx::query_as::<_, SettingRow>(
+        "SELECT key, value, updated_at FROM app_settings ORDER BY key",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(json!(rows)))
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingUpdateRequest {
+    key: String,
+    value: String,
+}
+
+/// Keys that require a step-up confirm token before updating.
+const SENSITIVE_SETTING_KEYS: &[&str] = &[
+    "llm_default_provider",
+    "llm_gemini_model",
+    "llm_claude_model",
+];
+
+/// `POST /api/admin/settings`
+///
+/// Updates a setting value.  Requires a valid `x-confirm-token` for
+/// provider/model keys (action: `"settings.update"`).  Emits an audit event
+/// and invalidates the `SettingsCache` after a successful update.
+async fn settings_update(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    headers: HeaderMap,
+    Json(body): Json<SettingUpdateRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate key length — mirrors the DB CHECK constraint.
+    if body.key.len() > 1024 || body.value.len() > 1024 {
+        return Err(AppError::Validation(
+            "key and value must be at most 1024 characters".into(),
+        ));
+    }
+
+    // Sensitive keys require step-up auth.
+    if SENSITIVE_SETTING_KEYS.contains(&body.key.as_str()) {
+        validate_confirm_token(
+            &headers,
+            &state.config.jwt_secret,
+            "settings.update",
+            admin.user_id,
+        )?;
+    }
+
+    // UPDATE — the DB CHECK constraint enforces that only known keys exist.
+    let updated = sqlx::query_as::<_, SettingRow>(
+        "UPDATE app_settings SET value = $1, updated_by = $2 WHERE key = $3 \
+         RETURNING key, value, updated_at",
+    )
+    .bind(&body.value)
+    .bind(admin.user_id)
+    .bind(&body.key)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::Validation(format!("unknown setting key '{}'", body.key)))?;
+
+    // Invalidate the in-memory cache so the next request re-reads from DB.
+    state.settings_cache.invalidate().await;
+
+    // Emit audit.
+    let _ = emit_audit(
+        &state.pool,
+        Some(admin.user_id),
+        &admin.email,
+        "admin.settings.update",
+        Some("setting"),
+        Some(&body.key),
+        Some(json!({ "new_value": body.value })),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(json!(updated)))
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct UsageQuery {
+    /// Number of days to look back (default 30, max 90).
+    days: Option<i32>,
+}
+
+/// A single row returned by `GET /api/admin/metrics/usage`.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct UsageRow {
+    pub day: NaiveDate,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub request_count: i32,
+    pub estimated_cost_usd: f64,
+}
+
+/// `GET /api/admin/metrics/usage?days=30`
+///
+/// Returns `llm_usage_daily` rows for the past `days` days, aggregated by
+/// (day, provider, model), ordered newest first.
+async fn metrics_usage(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Query(params): Query<UsageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let days = params.days.unwrap_or(30).clamp(1, 90) as i64;
+
+    let rows = sqlx::query_as::<_, UsageRow>(
+        "SELECT day, provider, model, \
+                SUM(input_tokens)::bigint AS input_tokens, \
+                SUM(output_tokens)::bigint AS output_tokens, \
+                SUM(request_count)::int AS request_count, \
+                SUM(estimated_cost_usd)::float8 AS estimated_cost_usd \
+         FROM llm_usage_daily \
+         WHERE day >= CURRENT_DATE - ($1 - 1) * INTERVAL '1 day' \
+         GROUP BY day, provider, model \
+         ORDER BY day DESC, provider, model",
+    )
+    .bind(days)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(json!(rows)))
+}
+
+// ── User management ───────────────────────────────────────────────────────────
+
+/// A user row returned by `GET /api/admin/users` (no passwords).
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct UserRow {
+    pub id: Uuid,
+    pub email: String,
+    pub name: Option<String>,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `GET /api/admin/users`
+///
+/// Returns all users ordered by creation date, newest first.  Passwords and
+/// other sensitive fields are excluded.
+async fn users_list(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = sqlx::query_as::<_, UserRow>(
+        "SELECT id, email, name, role, created_at FROM users ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(json!(rows)))
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitRequest {
+    /// Daily token limit override for this user (null = no per-user limit).
+    daily_token_limit: Option<i64>,
+    /// Daily request limit override for this user (null = no per-user limit).
+    daily_request_limit: Option<i32>,
+    /// Human-readable reason for the override (audit trail).
+    override_reason: Option<String>,
+}
+
+/// `POST /api/admin/users/:id/rate-limit`
+///
+/// Upserts a per-user rate limit override.  Requires `AdminUser`.
+/// Emits an audit event on success.
+async fn users_set_rate_limit(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(target_user_id): Path<Uuid>,
+    Json(body): Json<RateLimitRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Verify the target user exists.
+    let user_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+        .bind(target_user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+    if user_exists.is_none() {
+        return Err(AppError::NotFound);
+    }
+
+    sqlx::query(
+        "INSERT INTO user_rate_limits \
+         (user_id, daily_token_limit, daily_request_limit, override_reason, set_by) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (user_id) DO UPDATE SET \
+             daily_token_limit   = EXCLUDED.daily_token_limit, \
+             daily_request_limit = EXCLUDED.daily_request_limit, \
+             override_reason     = EXCLUDED.override_reason, \
+             set_by              = EXCLUDED.set_by",
+    )
+    .bind(target_user_id)
+    .bind(body.daily_token_limit)
+    .bind(body.daily_request_limit)
+    .bind(&body.override_reason)
+    .bind(admin.user_id)
+    .execute(&state.pool)
+    .await?;
+
+    // Emit audit.
+    let _ = emit_audit(
+        &state.pool,
+        Some(admin.user_id),
+        &admin.email,
+        "admin.user.rate_limit",
+        Some("user"),
+        Some(&target_user_id.to_string()),
+        Some(json!({
+            "daily_token_limit":   body.daily_token_limit,
+            "daily_request_limit": body.daily_request_limit,
+            "override_reason":     body.override_reason,
+        })),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(json!({
+        "ok": true,
+        "user_id": target_user_id,
+        "daily_token_limit": body.daily_token_limit,
+        "daily_request_limit": body.daily_request_limit,
+    })))
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
