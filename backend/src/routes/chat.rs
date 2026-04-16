@@ -168,14 +168,14 @@ async fn send_message(
     // budget-check + LLM-call + usage-upsert sequence for this user.
     // This prevents two concurrent requests from the same user from both
     // passing the budget check before either records usage (TOCTOU race).
-    // The permit is held for the entire handler and released automatically
-    // when `_permit` is dropped at the end of the async block.
+    // acquire_owned() is used so the OwnedSemaphorePermit can be moved into
+    // the stream closure; the permit is released only when the stream drops.
     let semaphore = state
         .chat_semaphores
         .entry(user.id)
         .or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(1)))
         .clone();
-    let _permit = semaphore.acquire().await.unwrap();
+    let permit = semaphore.acquire_owned().await.unwrap();
 
     // ── Budget check ───────────────────────────────────────────────────────
     // Query the current month's spend for this user from the daily rollup.
@@ -317,6 +317,12 @@ async fn send_message(
     let user_id = user.id;
 
     let stream_body = async_stream::stream! {
+        // Hold the per-user semaphore permit for the full duration of the stream
+        // (LLM calls + usage upsert).  Using acquire_owned() in the handler and
+        // moving the permit here ensures the guard is dropped only when the stream
+        // itself is dropped, not when the handler returns the response.
+        let _permit = permit;
+
         // Announce provider.
         yield Ok::<String, Infallible>(sse_line(
             "provider",
