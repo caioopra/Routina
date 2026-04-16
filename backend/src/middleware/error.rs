@@ -28,10 +28,37 @@ pub enum AppError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Monthly LLM budget exceeded.
+    #[error("Monthly budget exceeded")]
+    BudgetExceeded { monthly_spend: f64, budget: f64 },
+
+    /// Service unavailable (e.g. kill-switch engaged).
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        match &self {
+            AppError::BudgetExceeded {
+                monthly_spend,
+                budget,
+            } => {
+                let body = json!({
+                    "error": "budget_exceeded",
+                    "monthly_spend": monthly_spend,
+                    "budget": budget,
+                });
+                return (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
+            }
+            AppError::ServiceUnavailable(reason) => {
+                let body = json!({ "error": reason });
+                return (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response();
+            }
+            _ => {}
+        }
+
         let (status, message) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
@@ -53,6 +80,8 @@ impl IntoResponse for AppError {
                     "Internal server error".to_string(),
                 )
             }
+            // Already handled above; unreachable but needed for exhaustiveness.
+            AppError::BudgetExceeded { .. } | AppError::ServiceUnavailable(_) => unreachable!(),
         };
 
         (status, Json(json!({ "error": message }))).into_response()
@@ -97,5 +126,21 @@ mod tests {
     fn test_internal_hides_details() {
         let response = AppError::Internal("secret details".to_string()).into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_budget_exceeded_returns_429() {
+        let response = AppError::BudgetExceeded {
+            monthly_spend: 5.01,
+            budget: 5.0,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn test_service_unavailable_returns_503() {
+        let response = AppError::ServiceUnavailable("chat_disabled".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

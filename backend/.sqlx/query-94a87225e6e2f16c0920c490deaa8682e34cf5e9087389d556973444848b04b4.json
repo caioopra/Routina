@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT daily_token_limit, daily_request_limit, override_reason FROM user_rate_limits WHERE user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "daily_token_limit",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "daily_request_limit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "override_reason",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "94a87225e6e2f16c0920c490deaa8682e34cf5e9087389d556973444848b04b4"
+}
