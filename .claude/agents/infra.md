@@ -32,8 +32,7 @@ Manage deployment configuration, containerization, CI/CD pipelines, and local de
 
 - **docker-compose.yml:**
   - `app` — Rust backend (with hot reload via cargo-watch in dev)
-  - `postgres` — PostgreSQL 16 for development
-  - `postgres-test` — separate PostgreSQL instance for integration tests
+  - `postgres` — PostgreSQL 16 for development (tests reuse this server; `#[sqlx::test]` spins up per-test throwaway DBs)
   - Volume mounts for persistent data
   - Environment variables from `.env`
 

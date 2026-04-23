@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+body {
+  color: #eeedf5;
+  background-color: #08060f;
+}
+
 @theme {
   /* Surface depth tokens */
   --color-base: #08060f;

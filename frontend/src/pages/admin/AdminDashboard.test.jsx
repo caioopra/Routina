@@ -74,7 +74,7 @@ describe("AdminDashboard", () => {
 
   it("displays the active provider from mock settings", async () => {
     renderDashboard();
-    // active_provider setting is "gemini"
+    // llm_default_provider setting is "gemini"
     expect(await screen.findByText("gemini")).toBeInTheDocument();
   });
 

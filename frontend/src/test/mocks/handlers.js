@@ -30,7 +30,7 @@ let mockUserRole = "user";
 
 let mockSettings = [
   {
-    key: "active_provider",
+    key: "llm_default_provider",
     value: "gemini",
     updated_at: "2026-01-01T00:00:00Z",
   },
@@ -93,7 +93,7 @@ const mockAuditLog = [
     actor_email: "admin@test.com",
     action: "setting.update",
     target_type: "setting",
-    target_id: "active_provider",
+    target_id: "llm_default_provider",
     payload: { old: "claude", new: "gemini" },
     created_at: "2026-04-01T12:00:00Z",
   },
@@ -170,7 +170,7 @@ export function resetMockState() {
   mockUserRole = "user";
   mockSettings = [
     {
-      key: "active_provider",
+      key: "llm_default_provider",
       value: "gemini",
       updated_at: "2026-01-01T00:00:00Z",
     },

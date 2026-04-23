@@ -13,7 +13,7 @@ function sumCost(metrics) {
 
 function activeProvider(settings) {
   if (!settings) return "—";
-  const entry = settings.find((s) => s.key === "active_provider");
+  const entry = settings.find((s) => s.key === "llm_default_provider");
   return entry ? entry.value : "—";
 }
 

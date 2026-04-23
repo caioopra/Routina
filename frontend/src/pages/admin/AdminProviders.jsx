@@ -15,13 +15,29 @@ const LLM_SETTINGS = [
     key: "llm_gemini_model",
     label: "Gemini Model",
     type: "text",
-    placeholder: "e.g. gemini-2.0-flash",
+    placeholder: "e.g. gemini-2.5-flash-preview-05-20",
+    suggestions: [
+      "gemini-2.5-pro-preview-05-06",
+      "gemini-2.5-flash-preview-05-20",
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-exp",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+    ],
   },
   {
     key: "llm_claude_model",
     label: "Claude Model",
     type: "text",
-    placeholder: "e.g. claude-3-5-haiku-20241022",
+    placeholder: "e.g. claude-sonnet-4-20250514",
+    suggestions: [
+      "claude-opus-4-7",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5-20251001",
+      "claude-sonnet-4-20250514",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+    ],
   },
 ];
 
@@ -132,8 +148,8 @@ export default function AdminProviders() {
           {/* Chat kill-switch */}
           <section className="rounded-xl border border-purple-500/20 bg-[#161227] p-5">
             <h2
-              className="mb-3 text-base font-semibold text-[#f1eff8]"
-              style={{ fontFamily: "Outfit, sans-serif" }}
+              className="mb-3 text-base font-semibold"
+              style={{ fontFamily: "Outfit, sans-serif", color: "#f1eff8" }}
             >
               Chat Feature
             </h2>
@@ -143,8 +159,8 @@ export default function AdminProviders() {
           {/* LLM settings form */}
           <section className="rounded-xl border border-purple-500/20 bg-[#161227] p-5">
             <h2
-              className="mb-4 text-base font-semibold text-[#f1eff8]"
-              style={{ fontFamily: "Outfit, sans-serif" }}
+              className="mb-4 text-base font-semibold"
+              style={{ fontFamily: "Outfit, sans-serif", color: "#f1eff8" }}
             >
               LLM Configuration
             </h2>
@@ -152,7 +168,7 @@ export default function AdminProviders() {
             <form onSubmit={handleSave} noValidate>
               <div className="space-y-4">
                 {LLM_SETTINGS.map(
-                  ({ key, label, type, options, placeholder }) => (
+                  ({ key, label, type, options, placeholder, suggestions }) => (
                     <div key={key}>
                       <label
                         htmlFor={`setting-${key}`}
@@ -175,14 +191,26 @@ export default function AdminProviders() {
                           ))}
                         </select>
                       ) : (
-                        <input
-                          id={`setting-${key}`}
-                          type="text"
-                          value={form[key]}
-                          onChange={(e) => handleChange(key, e.target.value)}
-                          placeholder={placeholder}
-                          className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
-                        />
+                        <>
+                          <input
+                            id={`setting-${key}`}
+                            type="text"
+                            value={form[key]}
+                            onChange={(e) => handleChange(key, e.target.value)}
+                            placeholder={placeholder}
+                            list={
+                              suggestions ? `${key}-suggestions` : undefined
+                            }
+                            className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
+                          />
+                          {suggestions && (
+                            <datalist id={`${key}-suggestions`}>
+                              {suggestions.map((s) => (
+                                <option key={s} value={s} />
+                              ))}
+                            </datalist>
+                          )}
+                        </>
                       )}
                     </div>
                   ),
