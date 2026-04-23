@@ -42,7 +42,7 @@ Backend on `:3000`, frontend on `:5173`.
 
 | Feature | How |
 |---------|-----|
-| **Kill-switch** | Toggle on Dashboard → password modal → confirm → chat disabled system-wide |
+| **Kill-switch** | Toggle on Providers page → password modal → confirm → chat disabled system-wide (Dashboard shows status only) |
 | **Step-up auth** | Change any setting on Providers → password prompt before save |
 | **Audit trail** | After any action, check Audit page — everything is logged |
 | **Budget check** | Send chat messages (needs LLM API key) → token usage tracked per message |

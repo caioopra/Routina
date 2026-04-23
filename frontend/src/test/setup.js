@@ -54,6 +54,7 @@ afterEach(() => {
   server.resetHandlers();
   resetMockState();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 afterAll(() => server.close());
