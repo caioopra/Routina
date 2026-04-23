@@ -53,11 +53,11 @@ lint: ## Run clippy (zero warnings) + prettier check
 	cd backend && cargo clippy -- -D warnings
 	cd backend && cargo fmt --check
 
-check-backend: ## Mirror backend CI: fmt + clippy + sqlx-prepare + tests (DB must be running)
+check-backend: ## Mirror backend CI: fmt + clippy + sqlx-prepare + tests (requires `make db-up`)
 	cd backend && cargo fmt -- --check
-	cd backend && cargo clippy -- -D warnings
+	cd backend && SQLX_OFFLINE=true cargo clippy -- -D warnings
 	cd backend && SQLX_OFFLINE=false cargo sqlx prepare --workspace --check -- --all-targets
-	cd backend && cargo test
+	cd backend && SQLX_OFFLINE=true cargo test
 
 check-frontend: ## Mirror frontend CI: prettier + tests + build
 	cd frontend && npm run check
