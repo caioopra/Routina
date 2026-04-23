@@ -198,7 +198,9 @@ export default function AdminProviders() {
                             value={form[key]}
                             onChange={(e) => handleChange(key, e.target.value)}
                             placeholder={placeholder}
-                            list={suggestions ? `${key}-suggestions` : undefined}
+                            list={
+                              suggestions ? `${key}-suggestions` : undefined
+                            }
                             className="w-full rounded-lg border border-purple-500/30 bg-[#1e1836] px-3 py-2 text-sm text-[#f1eff8] placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-purple-500/60"
                           />
                           {suggestions && (
