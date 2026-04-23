@@ -1,4 +1,4 @@
-.PHONY: help install db-up db-down db-reset migrate prepare backend frontend dev test test-backend test-frontend lint build clean deploy
+.PHONY: help install db-up db-down db-reset migrate prepare backend frontend dev test test-backend test-frontend lint build clean deploy check-backend check-frontend fullcheck
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +52,17 @@ test-frontend: ## Run frontend tests
 lint: ## Run clippy (zero warnings) + prettier check
 	cd backend && cargo clippy -- -D warnings
 	cd backend && cargo fmt --check
+
+check-backend: ## Mirror backend CI: fmt + clippy + sqlx-prepare + tests (DB must be running)
+	cd backend && cargo fmt -- --check
+	cd backend && cargo clippy -- -D warnings
+	cd backend && SQLX_OFFLINE=false cargo sqlx prepare --workspace --check -- --all-targets
+	cd backend && cargo test
+
+check-frontend: ## Mirror frontend CI: prettier + tests + build
+	cd frontend && npm run check
+
+fullcheck: check-backend check-frontend ## Run backend + frontend CI checks locally (DB must be running)
 
 build: ## Production build for both sides
 	cd backend && cargo build --release
