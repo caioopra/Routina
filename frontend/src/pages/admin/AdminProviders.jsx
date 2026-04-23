@@ -132,8 +132,8 @@ export default function AdminProviders() {
           {/* Chat kill-switch */}
           <section className="rounded-xl border border-purple-500/20 bg-[#161227] p-5">
             <h2
-              className="mb-3 text-base font-semibold text-[#f1eff8]"
-              style={{ fontFamily: "Outfit, sans-serif" }}
+              className="mb-3 text-base font-semibold"
+              style={{ fontFamily: "Outfit, sans-serif", color: "#f1eff8" }}
             >
               Chat Feature
             </h2>
@@ -143,8 +143,8 @@ export default function AdminProviders() {
           {/* LLM settings form */}
           <section className="rounded-xl border border-purple-500/20 bg-[#161227] p-5">
             <h2
-              className="mb-4 text-base font-semibold text-[#f1eff8]"
-              style={{ fontFamily: "Outfit, sans-serif" }}
+              className="mb-4 text-base font-semibold"
+              style={{ fontFamily: "Outfit, sans-serif", color: "#f1eff8" }}
             >
               LLM Configuration
             </h2>
