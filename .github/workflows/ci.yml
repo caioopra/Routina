@@ -9,7 +9,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   DATABASE_URL: postgres://planner:planner@localhost:5432/planner
-  DATABASE_TEST_URL: postgres://planner:planner@localhost:5432/planner_test
   SQLX_OFFLINE: "true"
 
 jobs:
@@ -46,10 +45,6 @@ jobs:
           cache-on-failure: true
           cache-all-crates: true
 
-      - name: Create test database
-        run: |
-          PGPASSWORD=planner psql -h localhost -U planner -d planner -c "CREATE DATABASE planner_test;"
-
       - name: Check formatting
         working-directory: backend
         run: cargo fmt -- --check
@@ -76,7 +71,6 @@ jobs:
         run: cargo test
         env:
           DATABASE_URL: postgres://planner:planner@localhost:5432/planner
-          DATABASE_TEST_URL: postgres://planner:planner@localhost:5432/planner_test
 
   frontend:
     name: Frontend (React)
